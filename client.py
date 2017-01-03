@@ -36,13 +36,6 @@ BrickPiUpdateValues()
 DEFAULT_MOVEMENT_SPEED = 255  # Default movement speed
 DEFAULT_ROTATION_SPEED = 100  # Default rotation speed
 
-# Sensor values
-RIGHT_WHEEL = 0
-LEFT_WHEEL = 0
-ANGLE = 0
-FORWARD = 0
-BACKWARD = 0
-
 RUNNING = True
 
 
@@ -92,13 +85,12 @@ def rotate_sensor(deg, sampling_time=.1, delay_when_stopping=.05):
 
 
 def sense():
-    global RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD
-    RIGHT_WHEEL = BrickPi.Encoder[PORT_B]
-    LEFT_WHEEL = BrickPi.Encoder[PORT_C]
-    ANGLE = BrickPi.Encoder[PORT_D]
-    FORWARD = BrickPi.Sensor[PORT_2]
-    BACKWARD = BrickPi.Sensor[PORT_3]
-    return [RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD]
+    right_wheel = BrickPi.Encoder[PORT_B]
+    left_wheel = BrickPi.Encoder[PORT_C]
+    angle = BrickPi.Encoder[PORT_D]
+    forward = BrickPi.Sensor[PORT_2]
+    backward = BrickPi.Sensor[PORT_3]
+    return [right_wheel, left_wheel, angle, forward, backward]
 
 
 def forward(speed=DEFAULT_MOVEMENT_SPEED):
@@ -134,7 +126,7 @@ def scan():
     return 0
 
 
-def main():
+def move():
     global RUNNING
     while RUNNING:
         command, address = SOCK.recvfrom(1024)
@@ -144,23 +136,29 @@ def main():
         elif command == "S":
             backward()
         elif command == "D":
-            right()
-        elif command == "A":
             left()
+        elif command == "A":
+            right()
         elif command == "Z":
             stop()
         elif command == "X":
             stop()
             RUNNING = False
             SOCK.close()
-            break
 
         BrickPiUpdateValues()
-        state = sense()
-        SOCK.sendto(",".join([str(val) for val in state]), (UDP_IP, UDP_PORT))
-
-        time.sleep(0.1)
     return 0
 
-threading.Thread(target=scan).start()
-threading.Thread(target=main).start()
+
+def spin():
+    global RUNNING
+    while RUNNING:
+        robot_state = sense()
+        SOCK.sendto(",".join([str(val) for val in robot_state]), (UDP_IP, UDP_PORT))
+        time.sleep(0.1)
+
+
+if __name__ == "__main__":
+    threading.Thread(target=scan).start()
+    threading.Thread(target=move).start()
+    threading.Thread(target=spin).start()
