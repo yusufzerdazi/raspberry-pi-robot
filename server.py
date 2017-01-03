@@ -2,14 +2,16 @@ import socket
 import sys
 import math
 import threading
+import msvcrt
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image, ImageDraw, ImageQt
 
 IMAGE = Image.new("L", (512, 512), "grey")
+UDP_IP = "192.168.0.41"  # UDP IP Address
 UDP_PORT = 5005
-SOCK = socket.socket(socket.AF_INET,  # Internet
-                     socket.SOCK_DGRAM)  # UDP
+SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
+SOCK.setblocking(0)
 LINES = []
 
 
@@ -77,7 +79,7 @@ class CameraViewer(QtWidgets.QMainWindow):
 def get_robot_data():
     while True:
         draw = ImageDraw.Draw(robot_map.image)
-        data, address = SOCK.recvfrom(1024) # buffer size is 1024 bytes
+        data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
         distance, angle, x, y = [float(x) for x in data.decode().split(', ')]
         print([distance, angle, x, y])
         robot_map.robot.update_position(x, y)
@@ -98,6 +100,21 @@ def start():
     sys.exit(app.exec_())
 
 
-if __name__ == "__main__":
-    threading.Thread(target=start).start()
-    threading.Thread(target=get_robot_data).start()
+#if __name__ == "__main__":
+#    threading.Thread(target=start).start()
+#    threading.Thread(target=get_robot_data).start()
+
+
+while True:
+    try:
+        data, address = SOCK.recvfrom(1024)
+        print(data)
+    except BlockingIOError as ex:
+        pass
+    key = msvcrt.getch().decode().upper()
+    if key:
+        print(key + " pressed.")
+        SOCK.sendto(key.encode(), (UDP_IP, UDP_PORT))
+        if key == "X":
+            SOCK.close()
+            break
