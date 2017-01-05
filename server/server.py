@@ -24,7 +24,7 @@ IMAGE = Image.new("L", (WIDTH, HEIGHT), "grey")
 # Robot variables
 X = float(WIDTH/2)
 Y = float(HEIGHT/2)
-HEADING = 90
+HEADING = 0
 
 # Sensor values
 RIGHT_WHEEL = 0
@@ -34,6 +34,7 @@ FORWARD = 0
 BACKWARD = 0
 
 RUNNING = True
+TURNING = 0
 
 
 class CameraViewer(QtWidgets.QMainWindow):
@@ -64,49 +65,61 @@ class CameraViewer(QtWidgets.QMainWindow):
         self.imageLabel.adjustSize()
 
     def keyPressEvent(self, event):
-        global RUNNING
+        global RUNNING, RIGHT_WHEEL, LEFT_WHEEL, TURNING
+        key = event.key()
 
         # If escape pressed, quit the app
-        if event.key() == QtCore.Qt.Key_Escape:
+        if key == QtCore.Qt.Key_Escape:
+            SOCK.sendto("STOP".encode(), (UDP_IP, UDP_PORT))
             RUNNING = False
             self.close()
 
-        # If the key is an ASCII character, send it to the robot
-        c = event.key()
-        if c < 128:
-            SOCK.sendto(chr(c).encode(), (UDP_IP, UDP_PORT))
+        elif key == QtCore.Qt.Key_Q:
+            draw = ImageDraw.Draw(IMAGE)
+            draw.rectangle([(0,0),(1919,1079)], fill="grey", outline=None)
+
+        elif key == QtCore.Qt.Key_D or key == QtCore.Qt.Key_A:
+            if key == QtCore.Qt.Key_D:
+                TURNING = 1
+            else:
+                TURNING = -1
+            right_wheel = RIGHT_WHEEL
+            left_wheel = LEFT_WHEEL
+            SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
+            while abs(right_wheel-RIGHT_WHEEL) < 200 and abs(left_wheel-LEFT_WHEEL) < 200:
+                pass
+            SOCK.sendto("Z".encode(), (UDP_IP, UDP_PORT))
+            TURNING = 0
+
+        elif key < 128:
+            SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
 
 
 def calculate_new_position(left_delta, right_delta):
     global X, Y, HEADING
 
     # Convert the deltas to centimetres
-    left_delta_cm = CM_PER_DEGREE*left_delta*2.0
-    right_delta_cm = CM_PER_DEGREE*right_delta*2.0
+    left_distance = CM_PER_DEGREE*left_delta*2.0
+    right_distance = CM_PER_DEGREE*right_delta*2.0
+    abs_distance = (abs(left_distance)+abs(right_distance))/2
+    avg_distance = (left_distance+right_distance)/2
+    turning = TURNING
 
-    # If moved in straight line
-    if left_delta_cm == right_delta_cm:
-        X = X + left_delta_cm * math.cos(math.radians(HEADING))
-        Y = Y + right_delta_cm * math.sin(math.radians(HEADING))
+    if turning:
+        HEADING = HEADING + turning*360/(math.pi*ROBOT_WIDTH)
     else:
-        R = ROBOT_WIDTH * (left_delta_cm + right_delta_cm) / (2 * (right_delta_cm - left_delta_cm))
-        wd = (right_delta_cm - left_delta_cm) / ROBOT_WIDTH
-
-        X = X + R * math.sin(math.radians(wd + HEADING)) - R * math.sin(math.radians(HEADING))
-        Y = Y - R * math.cos(math.radians(wd + HEADING)) + R * math.cos(math.radians(HEADING))
-
-        HEADING = (HEADING + wd) % 360
+        X = X + avg_distance * math.cos(math.radians(HEADING))
+        Y = Y + avg_distance * math.sin(math.radians(HEADING))
 
 
-def update_map(distance, angle):
+def update_map(distance, angle, color=255):
     if distance not in [-1, 255]:
-        angle = (angle/2)%360
         draw = ImageDraw.Draw(IMAGE)
 
         x_distance = distance * math.cos(math.radians(angle))
         y_distance = distance * math.sin(math.radians(angle))
 
-        draw.line((X, Y, X + int(x_distance), Y + int(y_distance)), fill=255)
+        draw.line((X, Y, X + int(x_distance), Y + int(y_distance)), fill=color)
         draw.point((X + int(x_distance), Y + int(y_distance)), fill=0)
 
 
@@ -118,8 +131,9 @@ def run(app):
             data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
             right_wheel, left_wheel, angle, forward, backward = [float(x) for x in data.decode().split(',')]
             calculate_new_position(left_wheel-LEFT_WHEEL, right_wheel-RIGHT_WHEEL)
-            update_map(forward, angle)
-            update_map(backward, angle+180)
+            update_map(forward, angle/2 + 180)
+            update_map(backward, angle/2)
+            update_map(250, HEADING, "red")
             RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD = right_wheel, left_wheel, angle, forward, backward
         except BlockingIOError:
             pass

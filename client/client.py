@@ -5,10 +5,14 @@ from BrickPi import *
 import socket
 import threading
 import time
+import math
+
+from config import SENSING 
 
 UDP_IP = "192.168.0.17"  # UDP IP Address
 UDP_PORT = 5005  # UDP Port
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 SOCK.bind(("", UDP_PORT))
 
 BrickPiSetup()  # setup the serial port for communication
@@ -34,54 +38,34 @@ BrickPiUpdateValues()
 
 # Speeds
 DEFAULT_MOVEMENT_SPEED = 255  # Default movement speed
-DEFAULT_ROTATION_SPEED = 100  # Default rotation speed
+DEFAULT_ROTATION_SPEED = 150  # Default rotation speed
+
+# Constants
+ROBOT_WIDTH = 14 # Distance between wheels (cm)
+CM_PER_DEGREE = 36.1/720.0
+TURN_DISTANCE = (math.pi*14)/4
 
 RUNNING = True
 
 
-def rotate_sensor(deg, sampling_time=.1, delay_when_stopping=.05):
-    global DEFAULT_ROTATION_SPEED, RUNNING
-
-    current = 0
-    final = 0
-    BrickPiUpdateValues()
-    BrickPi.MotorEnable[PORT_D] = 1
-    
-    #For running clockwise and anticlockwise
-    if deg > 0:
-        BrickPi.MotorSpeed[PORT_D] = DEFAULT_ROTATION_SPEED
-    elif deg < 0:
-        BrickPi.MotorSpeed[PORT_D] = -DEFAULT_ROTATION_SPEED
-    else:
-        BrickPi.MotorSpeed[PORT_D] = 0
-
-    current = BrickPi.Encoder[PORT_D]  # Initial value of the encoder
-    final = deg*2  # Final value of the encoder
-    done = False
-
+def run():
+    global RUNNING
     while RUNNING:
-        result = BrickPiUpdateValues()  # Ask BrickPi to update values for sensors/motors
-        if not result:
-            # Check if final value reached for each of the motors
-            if (deg>0 and final>current) or (deg<0 and final<current):
-                # Read the encoder degrees
-                current=BrickPi.Encoder[PORT_D]
-            else:
-                done = True
-                if deg > 0:
-                    BrickPi.MotorSpeed[PORT_D] = -DEFAULT_ROTATION_SPEED
-                elif deg < 0:
-                    BrickPi.MotorSpeed[PORT_D] = DEFAULT_ROTATION_SPEED
-                else:
-                    BrickPi.MotorSpeed[PORT_D] = 0
-                BrickPiUpdateValues()
-                time.sleep(delay_when_stopping)
-                BrickPi.MotorEnable[PORT_D] = 0
-                BrickPiUpdateValues()
-        time.sleep(sampling_time)  # Sleep for the sampling time given (default:100 ms)
-        if done:  # If all the motors have already completed their rotation, then stop
-            break
+        robot_state = sense()
+        SOCK.sendto(",".join([str(val) for val in robot_state]), (UDP_IP, UDP_PORT))
+        #BrickPiUpdateValues()       # Ask BrickPi to update values for senso
+        time.sleep(.15)              # sleep for 100 ms
     return 0
+
+
+def stop_sensor():
+    global SENSING
+    SENSING = False
+
+
+def start_sensor():
+    global SENSING
+    SENSING = True
 
 
 def sense():
@@ -103,14 +87,21 @@ def backward(speed=DEFAULT_MOVEMENT_SPEED):
     BrickPi.MotorSpeed[PORT_C] = -speed
 
 
+def turn(angle):
+    arc_length = math.pi*14*(float(angle)/360.0)
+    angle = int(arc_length/CM_PER_DEGREE)
+    print angle
+    motorRotateDegree([DEFAULT_MOVEMENT_SPEED, DEFAULT_MOVEMENT_SPEED], [angle, -angle], [PORT_B, PORT_C])
+
+
 def right(speed=DEFAULT_MOVEMENT_SPEED):
-    BrickPi.MotorSpeed[PORT_B] = -speed
-    BrickPi.MotorSpeed[PORT_C] = speed
+    BrickPi.MotorSpeed[PORT_B] = speed
+    BrickPi.MotorSpeed[PORT_C] = -speed
 
 
 def left(speed=DEFAULT_MOVEMENT_SPEED):
-    BrickPi.MotorSpeed[PORT_B] = speed
-    BrickPi.MotorSpeed[PORT_C] = -speed
+    BrickPi.MotorSpeed[PORT_B] = -speed
+    BrickPi.MotorSpeed[PORT_C] = speed
 
 
 def stop(speed=DEFAULT_MOVEMENT_SPEED):
@@ -119,10 +110,14 @@ def stop(speed=DEFAULT_MOVEMENT_SPEED):
 
 
 def scan():
-    global RUNNING
+    global RUNNING, SENSING
     while RUNNING:
-        rotate_sensor(90)
-        rotate_sensor(-90)
+        if SENSING:
+            motorRotateDegree([DEFAULT_ROTATION_SPEED], [90], [PORT_D], False)
+            motorRotateDegree([DEFAULT_ROTATION_SPEED], [-90], [PORT_D], False)
+            motorRotateDegree([DEFAULT_ROTATION_SPEED], [0], [PORT_D], False)
+        else:
+            BrickPi.MotorSpeed[PORT_D] = 0
     return 0
 
 
@@ -136,29 +131,24 @@ def move():
         elif command == "S":
             backward()
         elif command == "D":
-            left()
-        elif command == "A":
             right()
+        elif command == "A":
+            left()
         elif command == "Z":
             stop()
         elif command == "X":
+            stop_sensor()
+        elif command == "C":
+            start_sensor()
+        elif command == "STOP":
             stop()
             RUNNING = False
+            SENSING = False
             SOCK.close()
-
-        BrickPiUpdateValues()
     return 0
 
 
-def spin():
-    global RUNNING
-    while RUNNING:
-        robot_state = sense()
-        SOCK.sendto(",".join([str(val) for val in robot_state]), (UDP_IP, UDP_PORT))
-        time.sleep(0.1)
-
-
 if __name__ == "__main__":
+    threading.Thread(target=run).start()
     threading.Thread(target=scan).start()
     threading.Thread(target=move).start()
-    threading.Thread(target=spin).start()
