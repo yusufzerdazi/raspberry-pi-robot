@@ -2,11 +2,12 @@ import socket
 import sys
 import math
 import threading
+import time
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image, ImageDraw, ImageQt
 
 # Socket variables
-UDP_IP = "192.168.0.41"  # UDP IP Address
+UDP_IP = "192.168.0.8"  # UDP IP Address
 UDP_PORT = 5005
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
@@ -34,7 +35,7 @@ FORWARD = 0
 BACKWARD = 0
 
 RUNNING = True
-TURNING = 0
+DIRECTION = 0
 
 
 class CameraViewer(QtWidgets.QMainWindow):
@@ -78,44 +79,36 @@ class CameraViewer(QtWidgets.QMainWindow):
             draw = ImageDraw.Draw(IMAGE)
             draw.rectangle([(0,0),(1919,1079)], fill="grey", outline=None)
 
-        elif key == QtCore.Qt.Key_D or key == QtCore.Qt.Key_A:
-            if key == QtCore.Qt.Key_D:
-                TURNING = 1
-            else:
-                TURNING = -1
-            right_wheel = RIGHT_WHEEL
-            left_wheel = LEFT_WHEEL
-            SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
-            while abs(right_wheel-RIGHT_WHEEL) < 200 and abs(left_wheel-LEFT_WHEEL) < 200:
-                pass
-            SOCK.sendto("Z".encode(), (UDP_IP, UDP_PORT))
-            TURNING = 0
-
         elif key < 128:
             SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
 
 
 def calculate_new_position(left_delta, right_delta):
-    global X, Y, HEADING
+    global X, Y, HEADING, DIRECTION
 
     # Convert the deltas to centimetres
-    left_distance = CM_PER_DEGREE*left_delta*2.0
-    right_distance = CM_PER_DEGREE*right_delta*2.0
+    left_distance = CM_PER_DEGREE*left_delta/2.0
+    right_distance = CM_PER_DEGREE*right_delta/2.0
     abs_distance = (abs(left_distance)+abs(right_distance))/2
     avg_distance = (left_distance+right_distance)/2
-    turning = TURNING
+    DIRECTION = 0
+    if left_delta != 0 and right_delta != 0:
+        left_direction = left_delta/abs(left_delta)
+        right_direction = right_delta/abs(right_delta)
+        DIRECTION = (left_direction != right_direction)*right_direction
 
-    if turning:
-        HEADING = HEADING + turning*360/(math.pi*ROBOT_WIDTH)
+    if DIRECTION:
+        HEADING = HEADING + DIRECTION*abs_distance*360/(math.pi*ROBOT_WIDTH)
     else:
         X = X + avg_distance * math.cos(math.radians(HEADING))
         Y = Y + avg_distance * math.sin(math.radians(HEADING))
 
 
-def update_map(distance, angle, color=255):
+def update_map(distance, angle, color=255, adjust=1):
     if distance not in [-1, 255]:
         draw = ImageDraw.Draw(IMAGE)
 
+        angle = angle + int(adjust)*HEADING
         x_distance = distance * math.cos(math.radians(angle))
         y_distance = distance * math.sin(math.radians(angle))
 
@@ -133,8 +126,14 @@ def run(app):
             calculate_new_position(left_wheel-LEFT_WHEEL, right_wheel-RIGHT_WHEEL)
             update_map(forward, angle/2 + 180)
             update_map(backward, angle/2)
-            update_map(250, HEADING, "red")
+            if not DIRECTION:
+                update_map(250, HEADING, "red", 0)
             RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD = right_wheel, left_wheel, angle, forward, backward
+            #if BACKWARD < 50 and abs(angle) < 20:
+            #    SOCK.sendto("A".encode(), (UDP_IP, UDP_PORT))
+            #    time.sleep(0.5)
+            #else:
+            #    SOCK.sendto("W".encode(), (UDP_IP, UDP_PORT))
         except BlockingIOError:
             pass
     SOCK.close()
