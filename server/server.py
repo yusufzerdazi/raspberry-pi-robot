@@ -7,14 +7,14 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image, ImageDraw, ImageQt
 
 # Socket variables
-UDP_IP = "192.168.0.8"  # UDP IP Address
+UDP_IP = "10.246.40.233"  # UDP IP Address
 UDP_PORT = 5005
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
 SOCK.setblocking(0)
 
 # Robot constants
-ROBOT_WIDTH = 14 # Distance between wheels (cm)
+ROBOT_WIDTH = 12.2# Distance between wheels (cm)
 CM_PER_DEGREE = 36.1/720.0
 
 # Map variables
@@ -95,7 +95,7 @@ def calculate_new_position(left_delta, right_delta):
     if left_delta != 0 and right_delta != 0:
         left_direction = left_delta/abs(left_delta)
         right_direction = right_delta/abs(right_delta)
-        DIRECTION = (left_direction != right_direction)*right_direction
+        DIRECTION = (left_direction != right_direction)*left_direction
 
     if DIRECTION:
         HEADING = HEADING + DIRECTION*abs_distance*360/(math.pi*ROBOT_WIDTH)
@@ -117,10 +117,9 @@ def update_map(distance, angle, color=255, adjust=1):
 
 
 def run(app):
-    global RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD, RUNNING
+    global RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD, RUNNING, HEADING
     while RUNNING:
         try:
-            draw = ImageDraw.Draw(IMAGE)
             data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
             right_wheel, left_wheel, angle, forward, backward = [float(x) for x in data.decode().split(',')]
             calculate_new_position(left_wheel-LEFT_WHEEL, right_wheel-RIGHT_WHEEL)
@@ -129,11 +128,6 @@ def run(app):
             if not DIRECTION:
                 update_map(250, HEADING, "red", 0)
             RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD = right_wheel, left_wheel, angle, forward, backward
-            #if BACKWARD < 50 and abs(angle) < 20:
-            #    SOCK.sendto("A".encode(), (UDP_IP, UDP_PORT))
-            #    time.sleep(0.5)
-            #else:
-            #    SOCK.sendto("W".encode(), (UDP_IP, UDP_PORT))
         except BlockingIOError:
             pass
     SOCK.close()
@@ -144,7 +138,6 @@ def run(app):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     threading.Thread(target=run, args=[app]).start()
-
     cv = CameraViewer()
     cv.show()
     sys.exit(app.exec_())
