@@ -13,26 +13,14 @@ SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
 SOCK.setblocking(0)
 
-# Robot constants
-ROBOT_WIDTH = 12.2# Distance between wheels (cm)
-CM_PER_DEGREE = 36.1/720.0
+# Probability distributions
+DISTANCE_DISTRIBUTION = [0.14, 0.72, 0.14]
+ANGLE_DISTRIBUTION = [0.05, 0.1, 0.15, 0.4, 0.15, 0.1, 0.05]
 
 # Map variables
 WIDTH = 1920
 HEIGHT = 1080
 IMAGE = Image.new("L", (WIDTH, HEIGHT), "grey")
-
-# Robot variables
-X = float(WIDTH/2)
-Y = float(HEIGHT/2)
-HEADING = 0
-
-# Sensor values
-RIGHT_WHEEL = 0
-LEFT_WHEEL = 0
-ANGLE = 0
-FORWARD = 0
-BACKWARD = 0
 
 RUNNING = True
 DIRECTION = 0
@@ -83,51 +71,53 @@ class CameraViewer(QtWidgets.QMainWindow):
             SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
 
 
-def calculate_new_position(left_delta, right_delta):
-    global X, Y, HEADING, DIRECTION
-
-    # Convert the deltas to centimetres
-    left_distance = CM_PER_DEGREE*left_delta/2.0
-    right_distance = CM_PER_DEGREE*right_delta/2.0
-    abs_distance = (abs(left_distance)+abs(right_distance))/2
-    avg_distance = (left_distance+right_distance)/2
-    DIRECTION = 0
-    if left_delta != 0 and right_delta != 0:
-        left_direction = left_delta/abs(left_delta)
-        right_direction = right_delta/abs(right_delta)
-        DIRECTION = (left_direction != right_direction)*left_direction
-
-    if DIRECTION:
-        HEADING = HEADING + DIRECTION*abs_distance*360/(math.pi*ROBOT_WIDTH)
-    else:
-        X = X + avg_distance * math.cos(math.radians(HEADING))
-        Y = Y + avg_distance * math.sin(math.radians(HEADING))
+def plot_measurement(coords):
+    draw = ImageDraw.Draw(IMAGE)
+    draw.line([int(coords[i]) for i in range(0,4)], fill=255)
+    draw.point([int(coords[i]) for i in range(2,4)], fill=0)
 
 
-def update_map(distance, angle, color=255, adjust=1):
-    if distance not in [-1, 255]:
-        draw = ImageDraw.Draw(IMAGE)
+def plot_state(x, y, heading):
+    draw = ImageDraw.Draw(IMAGE)
+    r = 3
+    x_distance = 200 * math.cos(math.radians(heading))
+    y_distance = 200 * math.sin(math.radians(heading))
+    draw.ellipse((x + WIDTH/2-r, y + HEIGHT/2-r, x + WIDTH/2+r, y + HEIGHT/2+r), fill="red")
+    draw.line((x + WIDTH/2, y + HEIGHT/2, x + WIDTH/2 + int(x_distance), y + HEIGHT/2 + int(y_distance)), fill="red")
 
-        angle = angle + int(adjust)*HEADING
-        x_distance = distance * math.cos(math.radians(angle))
-        y_distance = distance * math.sin(math.radians(angle))
 
-        draw.line((X, Y, X + int(x_distance), Y + int(y_distance)), fill=color)
-        draw.point((X + int(x_distance), Y + int(y_distance)), fill=0)
+def measurement_to_coords(start_x, start_y, heading, distance=200, sensor=0):
+    angle = sensor + heading
+    x_distance = distance * math.cos(math.radians(angle))
+    y_distance = distance * math.sin(math.radians(angle))
+    end_x = start_x + x_distance
+    end_y = start_y + y_distance
+    return (start_x+WIDTH/2.0, start_y+HEIGHT/2.0, end_x+WIDTH/2.0, end_y+HEIGHT/2.0, angle)
+
+
+def ransac(points):
+    sorted_points = sorted(L, key=itemgetter(4))
+    
 
 
 def run(app):
-    global RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD, RUNNING, HEADING
+    p_x = 0
+    p_y = 0
+    measurements = []
     while RUNNING:
         try:
             data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
-            right_wheel, left_wheel, angle, forward, backward = [float(x) for x in data.decode().split(',')]
-            calculate_new_position(left_wheel-LEFT_WHEEL, right_wheel-RIGHT_WHEEL)
-            update_map(forward, angle/2 + 180)
-            update_map(backward, angle/2)
-            if not DIRECTION:
-                update_map(250, HEADING, "red", 0)
-            RIGHT_WHEEL, LEFT_WHEEL, ANGLE, FORWARD, BACKWARD = right_wheel, left_wheel, angle, forward, backward
+            x, y, heading, angle, forward, backward = [float(x) for x in data.decode().split(',')]
+            if forward not in [-1, 255]:
+                forward_coords = measurement_to_coords(x, y, heading, forward, angle/2 + 180)
+                plot_measurement(forward_coords)
+            if backward not in [-1, 255]:
+                rear_coords = measurement_to_coords(x, y, heading, backward, angle/2)
+                plot_measurement(rear_coords)
+            if math.sqrt((x-p_x)**2+(y-p_y)**2) > 20:
+                plot_state(x, y, heading)
+                p_x = x
+                p_y = y
         except BlockingIOError:
             pass
     SOCK.close()

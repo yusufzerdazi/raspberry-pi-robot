@@ -4,8 +4,6 @@ import time
 import math
 
 from BrickPi import *
-from config import SENSING
-import brickpi
 
 # Socket
 UDP_IP = "10.245.131.89"  # UDP IP Address
@@ -19,11 +17,53 @@ DEFAULT_MOVEMENT_SPEED = 255  # Default movement speed
 DEFAULT_ROTATION_SPEED = 200  # Default rotation speed
 
 # Port variables
-RIGHT_WHEEL = PORT_B
-LEFT_WHEEL = PORT_C
+RIGHT_WHEEL = PORT_C
+LEFT_WHEEL = PORT_B
 SENSOR = PORT_D
 FRONT_SENSOR = PORT_2
 REAR_SENSOR = PORT_3
+
+# Constants
+ROBOT_WIDTH = 12.2# Distance between wheels (cm)
+CM_PER_DEGREE = 36.1/720.0
+
+
+class State(object):
+    def __init__(self):
+        self.left_encoder = 0
+        self.right_encoder = 0
+        self.x = 0.0
+        self.y = 0.0
+        self.heading = 0.0
+
+        self.sensor = BrickPi.Encoder[SENSOR]
+        self.front_sensor = BrickPi.Sensor[FRONT_SENSOR]
+        self.rear_sensor = BrickPi.Sensor[REAR_SENSOR]
+
+    def update(self, left, right, sensor, front_sensor, rear_sensor):
+        self.sensor = sensor
+        self.front_sensor = front_sensor
+        self.rear_sensor = rear_sensor
+
+        left_delta = (left - self.left_encoder)*CM_PER_DEGREE/2
+        right_delta = (right - self.right_encoder)*CM_PER_DEGREE/2
+
+        if left_delta == right_delta:
+            self.x = self.x + left_delta * math.cos(math.radians(self.heading))
+            self.y = self.y + right_delta * math.sin(math.radians(self.heading))
+        else:
+            R = ROBOT_WIDTH * (left_delta + right_delta) / (2 * (right_delta - left_delta))
+            wd = (right_delta - left_delta) / ROBOT_WIDTH
+
+            self.x = self.x + R * math.sin(wd + math.radians(self.heading)) - R * math.sin(math.radians(self.heading))
+            self.y = self.y - R * math.cos(wd + math.radians(self.heading)) + R * math.cos(math.radians(self.heading))
+            self.heading = (self.heading + math.degrees(wd)) % 360
+
+        self.left_encoder = left
+        self.right_encoder = right
+
+    def send(self):
+        SOCK.sendto(",".join([str(self.x), str(self.y), str(self.heading), str(self.sensor), str(self.front_sensor), str(self.rear_sensor)]), (UDP_IP, UDP_PORT))
 
 
 class Scan(threading.Thread):
@@ -79,8 +119,8 @@ class Move(threading.Thread):
         self.state = threading.Condition()
 
     def turn(self, direction=1, power=DEFAULT_MOVEMENT_SPEED):
-        BrickPi.MotorSpeed[RIGHT_WHEEL] = direction*power
-        BrickPi.MotorSpeed[LEFT_WHEEL] = -direction*power
+        BrickPi.MotorSpeed[RIGHT_WHEEL] = -direction*power
+        BrickPi.MotorSpeed[LEFT_WHEEL] = direction*power
 
     def drive(self, direction=1, power=DEFAULT_MOVEMENT_SPEED):
         BrickPi.MotorSpeed[RIGHT_WHEEL] = direction*power
@@ -94,21 +134,14 @@ class Move(threading.Thread):
 class Communication(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
+        self.state = State()
         self.running = True
-
-    def sense(self):
-        right_wheel = BrickPi.Encoder[RIGHT_WHEEL]
-        left_wheel = BrickPi.Encoder[LEFT_WHEEL]
-        angle = BrickPi.Encoder[SENSOR]
-        forward = BrickPi.Sensor[FRONT_SENSOR]
-        backward = BrickPi.Sensor[REAR_SENSOR]
-        return [right_wheel, left_wheel, angle, forward, backward]
 
     def run(self):
         while self.running:
             BrickPiUpdateValues()
-            status = self.sense()
-            SOCK.sendto(",".join([str(val) for val in status]), (UDP_IP, UDP_PORT))
+            self.state.update(BrickPi.Encoder[LEFT_WHEEL], BrickPi.Encoder[RIGHT_WHEEL], BrickPi.Encoder[SENSOR], BrickPi.Sensor[FRONT_SENSOR], BrickPi.Sensor[REAR_SENSOR])
+            self.state.send()
             time.sleep(.05)
         SOCK.close()
 
