@@ -6,7 +6,7 @@ import math
 from BrickPi import *
 
 # Socket
-UDP_IP = "10.245.131.89"  # UDP IP Address
+UDP_IP = "10.245.131.96"  # UDP IP Address
 UDP_PORT = 5005  # UDP Port
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -14,7 +14,7 @@ SOCK.bind(("", UDP_PORT))
 
 # Speeds
 DEFAULT_MOVEMENT_SPEED = 255  # Default movement speed
-DEFAULT_ROTATION_SPEED = 200  # Default rotation speed
+DEFAULT_ROTATION_SPEED = 150  # Default rotation speed
 
 # Port variables
 RIGHT_WHEEL = PORT_C
@@ -142,7 +142,7 @@ class Communication(threading.Thread):
             BrickPiUpdateValues()
             self.state.update(BrickPi.Encoder[LEFT_WHEEL], BrickPi.Encoder[RIGHT_WHEEL], BrickPi.Encoder[SENSOR], BrickPi.Sensor[FRONT_SENSOR], BrickPi.Sensor[REAR_SENSOR])
             self.state.send()
-            time.sleep(.05)
+            time.sleep(.02)
         SOCK.close()
 
     def stop(self):

@@ -5,11 +5,17 @@ import threading
 import time
 import random
 from numpy.linalg import norm
+from matplotlib import cm
 import numpy as np
 from scipy import stats
 from operator import itemgetter
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image, ImageDraw, ImageQt
+from scipy.misc import toimage
+
+
+import scipy.misc
+from skimage import draw
 
 # Socket variables
 UDP_IP = "10.246.40.233"  # UDP IP Address
@@ -18,17 +24,18 @@ SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
 SOCK.setblocking(0)
 
-# Probability distributions
-DISTANCE_DISTRIBUTION = [0.14, 0.72, 0.14]
-ANGLE_DISTRIBUTION = [0.05, 0.1, 0.15, 0.4, 0.15, 0.1, 0.05]
-
 # Map variables
 WIDTH = 1920
 HEIGHT = 1080
-IMAGE = Image.new("L", (WIDTH, HEIGHT), "grey")
+MAP = np.full((HEIGHT,WIDTH), 128, dtype=np.uint8)
+#IMAGE = Image.new("L", (WIDTH, HEIGHT), "grey")
 
 RUNNING = True
 DIRECTION = 0
+
+HEADING = 0
+X = WIDTH/2
+Y = HEIGHT/2
 
 
 class CameraViewer(QtWidgets.QMainWindow):
@@ -54,7 +61,10 @@ class CameraViewer(QtWidgets.QMainWindow):
 
     def open(self):
         # Get data and display
-        image = ImageQt.ImageQt(IMAGE)
+        #image = ImageQt.ImageQt(IMAGE)
+        map = np.copy(MAP)
+        plot_state(map)
+        image = ImageQt.ImageQt(Image.fromarray(map))
         self.imageLabel.setPixmap(QtGui.QPixmap.fromImage(image))
         self.imageLabel.adjustSize()
 
@@ -69,27 +79,35 @@ class CameraViewer(QtWidgets.QMainWindow):
             self.close()
 
         elif key == QtCore.Qt.Key_Q:
-            draw = ImageDraw.Draw(IMAGE)
-            draw.rectangle([(0,0),(1919,1079)], fill="grey", outline=None)
+            MAP = np.full((HEIGHT,WIDTH), 128, dtype=np.uint8)
 
         elif key < 128:
             SOCK.sendto(chr(key).encode(), (UDP_IP, UDP_PORT))
 
 
 def plot_measurement(coords):
-    draw = ImageDraw.Draw(IMAGE)
-    draw.line([int(coords[i]) for i in range(0,4)], fill=255)
-    draw.point([int(coords[i]) for i in range(2,4)], fill=0)
+    #draw = ImageDraw.Draw(IMAGE)
+    #draw.line(, fill=255)
+    rr, cc = draw.line(int(coords[1]),int(coords[0]),int(coords[3]),int(coords[2]))
+    MAP[rr, cc] =  255
+    rr, cc = draw.circle(int(coords[3]),int(coords[2]),3)
+    MAP[rr, cc] =  0
+    #draw.point([int(coords[i]) for i in range(2,4)], fill=0)
 
 
-def plot_state(x, y, heading):
-    draw = ImageDraw.Draw(IMAGE)
-    r = 3
-    x_distance = 200 * math.cos(math.radians(heading))
-    y_distance = 200 * math.sin(math.radians(heading))
-    draw.ellipse((x + WIDTH/2-r, y + HEIGHT/2-r, x + WIDTH/2+r, y + HEIGHT/2+r), fill="red")
-    draw.line((x + WIDTH/2, y + HEIGHT/2, x + WIDTH/2 + int(x_distance), y + HEIGHT/2 + int(y_distance)), fill="red")
+def plot_state(map):
+    #draw = ImageDraw.Draw(IMAGE)
+    #r = 3
+    x_distance = 200 * math.cos(math.radians(HEADING))
+    y_distance = 200 * math.sin(math.radians(HEADING))
+    #draw.ellipse((x + WIDTH/2-r, y + HEIGHT/2-r, x + WIDTH/2+r, y + HEIGHT/2+r), fill="red")
+    #draw.line((x + WIDTH/2, y + HEIGHT/2, x + WIDTH/2 + int(x_distance), y + HEIGHT/2 + int(y_distance)), fill="red")
     #draw.ellipse((x + WIDTH/2 + int(x_distance), y + HEIGHT/2 + int(y_distance)), fill="black")
+    rr, cc = draw.line(int(Y+HEIGHT/2),int(X+WIDTH/2),int(Y+HEIGHT/2+y_distance),int(X+WIDTH/2+x_distance))
+    map[rr, cc] =  0
+
+    rr, cc = draw.circle(int(Y+HEIGHT/2),int(X+WIDTH/2),5)
+    map[rr, cc] =  0
 
 
 def measurement_to_coords(start_x, start_y, heading, distance=200, sensor=0):
@@ -163,15 +181,16 @@ class Main(threading.Thread):
         ransac(10, 5, 20, 2, 10, measurements)
 
     def remote_control_loop(self):
+        global X, Y, HEADING
         try:
             data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
-            x, y, heading, angle, forward, backward = [float(x) for x in data.decode().split(',')]
+            X, Y, HEADING, angle, forward, backward = [float(x) for x in data.decode().split(',')]
             if forward not in [-1, 255]:
-                plot_measurement(measurement_to_coords(x, y, heading, forward, angle/2 + 180))
+                plot_measurement(measurement_to_coords(X, Y, HEADING, forward, angle/2 + 180))
             if backward not in [-1, 255]:
-                plot_measurement(measurement_to_coords(x, y, heading, backward, angle/2))
+                plot_measurement(measurement_to_coords(X, Y, HEADING, backward, angle/2))
             #if math.sqrt((x-self.p_x)**2+(y-self.p_y)**2) > 20:
-            plot_state(x, y, heading)
+            #plot_state(x, y, heading)
             #    self.p_x = x
             #    self.p_y = y
         except BlockingIOError:
