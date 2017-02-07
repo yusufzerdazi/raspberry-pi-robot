@@ -13,18 +13,18 @@ SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 SOCK.bind(("", UDP_PORT))
 
 # Speeds
-DEFAULT_MOVEMENT_SPEED = 255  # Default movement speed
-DEFAULT_ROTATION_SPEED = 150  # Default rotation speed
+DEFAULT_MOVEMENT_SPEED = 150  # Default movement speed
+DEFAULT_ROTATION_SPEED = 60  # Default rotation speed
 
 # Port variables
 RIGHT_WHEEL = PORT_C
-LEFT_WHEEL = PORT_B
+LEFT_WHEEL = PORT_A
 SENSOR = PORT_D
 FRONT_SENSOR = PORT_2
 REAR_SENSOR = PORT_3
 
 # Constants
-ROBOT_WIDTH = 12.2# Distance between wheels (cm)
+ROBOT_WIDTH = 12.2#16# Distance between wheels (cm)
 CM_PER_DEGREE = 36.1/720.0
 
 
@@ -48,7 +48,7 @@ class State(object):
         left_delta = (left - self.left_encoder)*CM_PER_DEGREE/2
         right_delta = (right - self.right_encoder)*CM_PER_DEGREE/2
 
-        if left_delta == right_delta:
+        if abs(left_delta - right_delta) < 1:
             self.x = self.x + left_delta * math.cos(math.radians(self.heading))
             self.y = self.y + right_delta * math.sin(math.radians(self.heading))
         else:
@@ -74,13 +74,14 @@ class Scan(threading.Thread):
         self.state = threading.Condition()
 
     def run(self):
-        self.resume() # unpause self
         while self.running:
             with self.state:
                 if self.paused:
                     self.state.wait() # block until notified
             self.rotate(DEFAULT_ROTATION_SPEED, 90, False)
+            SOCK.sendto(",".join(['-1','-1','-1','-1','-1','-1']), (UDP_IP, UDP_PORT))
             self.rotate(DEFAULT_ROTATION_SPEED, -90, False)
+            SOCK.sendto(",".join(['-1','-1','-1','-1','-1','-1']), (UDP_IP, UDP_PORT))
 
     def rotate(self, power, deg, sampling_time=0.05):
         finished = False
@@ -123,7 +124,7 @@ class Move(threading.Thread):
         BrickPi.MotorSpeed[LEFT_WHEEL] = direction*power
 
     def drive(self, direction=1, power=DEFAULT_MOVEMENT_SPEED):
-        BrickPi.MotorSpeed[RIGHT_WHEEL] = direction*power
+        BrickPi.MotorSpeed[RIGHT_WHEEL] = int(direction*power*0.95)
         BrickPi.MotorSpeed[LEFT_WHEEL] = direction*power
 
     def stop(self):
@@ -134,16 +135,24 @@ class Move(threading.Thread):
 class Communication(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
-        self.state = State()
+        self.status = State()
         self.running = True
+        self.paused = False
 
     def run(self):
         while self.running:
             BrickPiUpdateValues()
-            self.state.update(BrickPi.Encoder[LEFT_WHEEL], BrickPi.Encoder[RIGHT_WHEEL], BrickPi.Encoder[SENSOR], BrickPi.Sensor[FRONT_SENSOR], BrickPi.Sensor[REAR_SENSOR])
-            self.state.send()
+            if not self.paused:
+                self.status.update(BrickPi.Encoder[LEFT_WHEEL], BrickPi.Encoder[RIGHT_WHEEL], BrickPi.Encoder[SENSOR], BrickPi.Sensor[FRONT_SENSOR], BrickPi.Sensor[REAR_SENSOR])
+                self.status.send()
             time.sleep(.02)
         SOCK.close()
+
+    def resume(self):
+        self.paused = False
+
+    def pause(self):
+        self.paused = True
 
     def stop(self):
         self.running = False
@@ -177,6 +186,10 @@ class Robot(threading.Thread):
                 self.scan.pause()
             elif command == "C":
                 self.scan.resume()
+            elif command == "P":
+                self.communication.pause()
+            elif command == "R":
+                self.communication.resume()
             elif command == "STOP":
                 self.stop()
         self.scan.stop()
