@@ -13,8 +13,8 @@ SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 SOCK.bind(("", UDP_PORT))
 
 # Speeds
-DEFAULT_MOVEMENT_SPEED = 150  # Default movement speed
-DEFAULT_ROTATION_SPEED = 60  # Default rotation speed
+DEFAULT_MOVEMENT_SPEED = 170  # Default movement speed
+DEFAULT_ROTATION_SPEED = 255  # Default rotation speed
 
 # Port variables
 RIGHT_WHEEL = PORT_C
@@ -79,9 +79,9 @@ class Scan(threading.Thread):
                 if self.paused:
                     self.state.wait() # block until notified
             self.rotate(DEFAULT_ROTATION_SPEED, 90, False)
-            SOCK.sendto(",".join(['-1','-1','-1','-1','-1','-1']), (UDP_IP, UDP_PORT))
+            SOCK.sendto("SCAN", (UDP_IP, UDP_PORT))
             self.rotate(DEFAULT_ROTATION_SPEED, -90, False)
-            SOCK.sendto(",".join(['-1','-1','-1','-1','-1','-1']), (UDP_IP, UDP_PORT))
+            SOCK.sendto("SCAN", (UDP_IP, UDP_PORT))
 
     def rotate(self, power, deg, sampling_time=0.05):
         finished = False
