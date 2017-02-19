@@ -58,6 +58,8 @@ class CameraViewer(QtWidgets.QMainWindow):
         # Convert to greyscale and display
         image = self.map.display()
         display = image.convert("L")
+        display = display.crop((self.robot.get_coords()[0]-192,self.robot.get_coords()[1]-108,self.robot.get_coords()[0]+192,self.robot.get_coords()[1]+108))
+        display = display.resize((1920,1080)) 
         image_qt = ImageQt.ImageQt(display)
         self.imageLabel.setPixmap(QtGui.QPixmap.fromImage(image_qt))
         self.imageLabel.adjustSize()
@@ -202,7 +204,7 @@ class Main(threading.Thread):
     def run(self):
         #self.ransac_loop()
         while RUNNING:
-            self.continuous_measurement()
+            self.slam()
         SOCK.close()
         return 0
 
@@ -276,7 +278,7 @@ class Main(threading.Thread):
         meas = []
         SOCK.sendto("R".encode(), (UDP_IP, UDP_PORT))
         SOCK.sendto("C".encode(), (UDP_IP, UDP_PORT))
-        while count < 1:
+        while count < 4:
             try:
                 data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
                 decoded = data.decode().split(',')
@@ -350,7 +352,7 @@ class Main(threading.Thread):
         SOCK.sendto("R".encode(), (UDP_IP, UDP_PORT))
         count = 0
         meas = []
-        while count < 1:
+        while count < 4:
             try:
                 data, address = SOCK.recvfrom(1024)  # buffer size is 1024 bytes
                 decoded = data.decode().split(',')
@@ -386,8 +388,10 @@ class Main(threading.Thread):
                         if el.distance < min_element.distance:
                             min_element = el
                     temp_map.plot(min_element)
+                    print("GOT HERE")
                 deg += 24
-
+            if key == -19:
+                temp_map.display_without_robot().show()
             dist = rmsdiff(temp_map.display_without_robot(), self.map.display_without_robot())
             print(dist)
             if dist > max_dist:

@@ -6,7 +6,7 @@ import math
 from BrickPi import *
 
 # Socket
-UDP_IP = "10.245.131.96"  # UDP IP Address
+UDP_IP = "10.245.131.211"  # UDP IP Address
 UDP_PORT = 5005  # UDP Port
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -14,7 +14,7 @@ SOCK.bind(("", UDP_PORT))
 
 # Speeds
 DEFAULT_MOVEMENT_SPEED = 170  # Default movement speed
-DEFAULT_ROTATION_SPEED = 255  # Default rotation speed
+DEFAULT_ROTATION_SPEED = 80  # Default rotation speed
 
 # Port variables
 RIGHT_WHEEL = PORT_C
