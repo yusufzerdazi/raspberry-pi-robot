@@ -1,16 +1,20 @@
-import communication
-import copy
 import math
 import numpy as np
 
+import communication
+import algebra
+
+
 class State(object):
-    def __init__(self, origin=np.zeros(2), location=np.zeros(2), heading=0.0):
-        self.origin = origin
+    def __init__(self, location=np.zeros(2), heading=0.0):
         self.location = location
         self.heading = heading
 
+    def __add__(self, other):
+        return State(location=self.location+other.location, heading=self.heading+other.heading)
+
     def update(self, location, heading):
-        self.location = location + self.origin
+        self.location = location
         self.heading = heading
 
     def delta(self, delta_location=np.zeros(2), delta_heading=0.0):
@@ -23,45 +27,65 @@ class Measurement(object):
         self.state = state
         self.angle = angle
         self.distance = distance
-
-    def cartesian(self):
-        theta = math.radians(self.angle + self.state.heading)
-        dx = self.distance * math.cos(theta)
-        dy = self.distance * math.sin(theta)
-        return self.state.location + np.array([dx, dy])
+        self.location = self.state.location + np.array([self.distance*math.cos(math.radians(self.angle+self.state.heading)),
+                                                        self.distance*math.sin(math.radians(self.angle+self.state.heading))])
 
 
 class Robot(object):
-    def __init__(self, width, height):
-        self.origin=np.array([width/2, height/2])
-        self.state = State(origin=self.origin)
+    def __init__(self):
+        self.state = State()
         self.adjustment = State()
+        self.adjusted = self.state + self.adjustment
         self.communication = communication.Communication()
-
-    def adjusted(self):
-        return State(origin=self.origin, location=self.state.location+self.adjustment.location, heading=self.state.heading+self.adjustment.heading)
-
-    def update(self):
-        x, y, heading, angle, front, rear = self.communication.sense()
-        location = np.array([x, y])
-        self.state.update(location, heading)
-        return (angle, front, rear)
+        self.communication.start()
 
     def sense(self):
-        result = []
-        angle, front, rear = self.update()
-        result.append(Measurement(self.state, angle/2, front))
-        result.append(Measurement(self.state, angle/2 + 180, rear))
-        return result
+        """Access the measurements recieved since the last sense, update the robot's state, and return
+        them as a list of Measurement objects.
+
+        Returns:
+            list: List of measurements.
+        """
+        measurements = []
+        sensed = self.communication.sense()
+
+        # For each measurement.
+        for x, y, heading, angle, front, rear in sensed:
+            # If there is a heading adjustment, the recieved coordinates need to be adjusted.
+            location = np.array([x, y])
+            moved = location - self.state.location
+            delta = algebra.rotate_point(np.zeros(2), moved, self.adjustment.heading) - moved
+
+            # Update the state and adjustment
+            self.state.update(location, heading)
+            self.adjustment.delta(delta)
+            self.adjusted = self.state + self.adjustment
+
+            # Append measurements for front and rear sensors.
+            measurements.append(Measurement(self.adjusted, (angle/2) % 360, front))
+            measurements.append(Measurement(self.adjusted, (angle/2 + 180) % 360, rear))
+
+        return measurements
+
+    def senses(self, n):
+        measurements = []
+        while len(measurements) < n:
+            new = self.sense()
+            measurements.extend([m for m in new if m.distance not in [-1, 255]])
+        return measurements
 
     def move(self, speed, rotate):
+        """Sends speed and direction instructions to robot"""
         self.communication.move(speed, rotate)
 
     def stop(self):
+        """Tells robot to stop"""
         self.communication.stop()
 
     def pause(self):
+        """Tells robot to pause sensing"""
         self.communication.pause()
 
     def resume(self):
+        """Tells robot to resume sensing"""
         self.communication.resume()
