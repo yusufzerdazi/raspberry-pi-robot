@@ -3,15 +3,17 @@ import math
 import numpy as np
 import algebra
 import random
+import threading
 from robot import State
-from robot import Measurement
 
-class Robot(object):
+
+class Communication(threading.Thread):
     def __init__(self):
+        threading.Thread.__init__(self)
+
         self.state = State()
         self.adjustment = State()
         self.adjusted = self.state + self.adjustment
-        self.start = time.time()
         self.current = time.time()
 
         self.rotating = False
@@ -23,6 +25,9 @@ class Robot(object):
 
         self.error = [0,0]
 
+    def run(self):
+        pass
+
     def sense(self):
         """Access the measurements recieved since the last sense, update the robot's state, and return
         them as a list of Measurement objects.
@@ -30,8 +35,8 @@ class Robot(object):
         Returns:
             list: List of measurements.
         """
-        if time.time() - self.current < 0.002:
-            pass#time.sleep(0.0002)
+        if time.time() - self.current < 0.02:
+            time.sleep(0.02)
 
         new = time.time()
         delta_time = new - self.current
@@ -57,38 +62,46 @@ class Robot(object):
             #self.error[0] = self.error[0] + random.random()-0.5
             #self.error[1] = self.error[1] + random.random()-0.5
 
+
+
         t = self.current
         m = 180
-        angle = m - abs(t*1500 % (2*m) - m) - 90
-        dxr = 80 - self.x - self.error[0] + 4*random.random()
-        dxl = 80 + self.x + self.error[0] + 4*random.random()
-        dyb = 80 - self.y - self.error[1] + 4*random.random()
-        dyt = 80 + self.y + self.error[1] + 4*random.random()
+        angle = m - abs(t*150 % (2*m) - m) - 90
+        dxr = 80 - self.x - self.error[0] + 2*random.random()
+        dxl = 80 + self.x + self.error[0] + 2*random.random()
+        dyb = 80 - self.y - self.error[1] + 2*random.random()
+        dyt = 80 + self.y + self.error[1] + 2*random.random()
 
-        f_distance = 0
-        r_distance = 0
-        if 0 < (angle + self.heading) % 360 < 180:
-            f_distance = abs(dyb/math.sin(math.radians(angle+self.heading)))
-            r_distance = abs(dyt/math.sin(math.radians(angle+self.heading+180)))
-            
+        FA = 0
+        RA = 0
+        FB = 0
+        RB = 0
+        R = 80
+
+        if 90 < (angle + self.heading) % 360 <= 270:
+            FA = abs((R + self.x)/math.cos(math.radians(angle + self.heading)))
+            RA = abs((R - self.x)/math.cos(math.radians(angle + self.heading)))
         else:
-            f_distance = abs(dyt/math.sin(math.radians(angle+self.heading)))
-            r_distance = abs(dyb/math.sin(math.radians(angle+self.heading+180)))
+            FA = abs((R - self.x)/math.cos(math.radians(angle + self.heading)))
+            RA = abs((R + self.x)/math.cos(math.radians(angle + self.heading)))
 
-        """if 90 < (angle + self.heading) % 360 < 270:
-            f_distance = min(f_distance, abs(dxl/math.cos(math.radians(angle+self.heading))))
-            r_distance = min(r_distance, abs(dxr/math.cos(math.radians(angle+self.heading+180))))
+        if 180 < (angle + self.heading) % 360 <= 360:
+            FB = abs((R - self.y)/math.sin(math.radians(angle + self.heading)))
+            RB = abs((R + self.y)/math.sin(math.radians(angle + self.heading)))
         else:
-            f_distance = min(f_distance, abs(dxr/math.cos(math.radians(angle+self.heading))))
-            r_distance = min(r_distance, abs(dxl/math.cos(math.radians(angle+self.heading+180))))"""
+            FB = abs((R + self.y)/math.sin(math.radians(angle + self.heading)))
+            RB = abs((R - self.y)/math.sin(math.radians(angle + self.heading)))
 
-        front = f_distance if (f_distance < 100) else 255# and np.sign(math.cos(math.radians(angle + self.heading))) > 0) else 255
-        rear = r_distance if (r_distance < 100) else 255# and np.sign(math.cos(math.radians(angle + self.heading))) > 0) else 255
+
+        F = min(FA, FB)
+        R = min(RA, RB)
+
+        front = F if (F < 100) else 255
+        rear = R if (R < 100) else 255
 
         # Append measurements for front and rear sensors.
         measurements = []
-        measurements.append(Measurement(self.adjusted, angle % 360, front))
-        measurements.append(Measurement(self.adjusted, (angle + 180) % 360, rear))
+        measurements.append((self.x, self.y, self.heading, angle*2 % 360, front, rear))
 
         self.current = new
 

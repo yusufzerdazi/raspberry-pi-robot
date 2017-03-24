@@ -1,13 +1,49 @@
-import math
+"""Module that contains general functions for 2D algebraic manipulations."""
 
-import numpy as np
+import math
+import numpy
+
+
+def cart_to_pol(coordinates):
+    """Convert cartesian coordinates to polar.
+
+    Args:
+        coordinates (numpy.ndarray): Coordinates to convert.
+
+    Returns:
+        tuple: Polar coordinates.
+    """
+    r = numpy.linalg.norm(coordinates)
+    theta = math.degrees(np.arctan2(coordinates[1], coordinates[0]))
+    return r, theta
+
+
+def pol_to_cart(r, theta):
+    """
+    Convert polar to cartesian coordinates.
+
+    Args:
+        r (float): Distance from origin.
+        theta (float): Angle.
+
+    Returns:
+        numpy.ndarray: Cartesian coordinates.
+    """
+    x = r * np.cos(math.radians(theta))
+    y = r * np.sin(math.radians(theta))
+    return np.array([x, y])
 
 
 def rotate_point(centre, point, angle):
-    """
-    Rotate a point counterclockwise by a given angle around a given centre.
+    """Rotate a point counterclockwise by a given angle around a given centre.
 
-    The angle should be given in degrees.
+    Args:
+        centre (numpy.ndarray): Centre of rotation
+        point (numpy.ndarray): Point to rotate
+        angle (float): Angle of rotation (in degrees)
+
+    Returns:
+        numpy.array: Rotated point
     """
     ox, oy = centre
     px, py = point
@@ -19,6 +55,16 @@ def rotate_point(centre, point, angle):
 
 
 def closest_point(point, slope, intercept):
+    """Given a point and a line, find the point on the line closest to the point.
+
+    Args:
+        point (numpy.ndarray): Point
+        slope (float): Gradient of the line
+        intercept (float): y-intercept of the line
+
+    Returns:
+        numpy.array: Closest point on line.
+    """
     a = slope
     b = -1
     c = intercept
@@ -30,21 +76,56 @@ def closest_point(point, slope, intercept):
 
 
 def line_equation(A, B):
-    a = (A[1] - B[1])/(A[0] - B[0])
-    b = A[1] - a*A[0]
-    return a, b
+    """Given two points on a line, find its equation.
+    
+    Args:
+        A (numpy.ndarray): First point
+        B (numpy.ndarray): Second point
+
+    Returns:
+        tuple: slope, intercept pair.
+    """
+    slope = (A[1] - B[1])/(A[0] - B[0])
+    intercept = A[1] - slope*A[0]
+    return slope, intercept
 
 
-def line_intersection(a1, b1, a2, b2):
-    x = (b2-b1)/(a1-a2)
-    y = a2*x + b2
+def line_intersection(slope1, intercept1, slope2, intercept2):
+    """Given two line equations, find their intersection point.
+
+    Args:
+        slope1 (float): SLope of first line
+        intercept1 (float): y-intercept of first line
+        slope2 (float): Slope of second line
+        intercept2 (float): y-intercept of second line
+
+    Returns:
+        np.array: Their intersection point.
+    """
+    # If they are parallel, they don't intersect (or their intersection is infinite).
+    if slope1 == slope2:
+        return -1
+
+    x = (intercecp2-intercept1)/(slope1-slope2)
+    y = slope2*x + intercept2
 
     return np.array([x, y])
 
 
-def rotate_line(centre, angle, a, b):
-    A = np.array([0, b])
-    B = np.array([1, a + b])
+def rotate_line(centre, angle, slope, intercept):
+    """Rotate a line by a given angle about a given centre.
+
+    Args:
+        centre (array): Centre of rotation
+        angle (float): Angle to rotate by (in degrees)
+        slope (float): Gradient of line
+        intercept (float): y-intercept of line.
+
+    Returns:
+        tuple: Equation of rotated line.
+    """
+    A = np.array([0, intercept])
+    B = np.array([1, slope + intercept])
 
     Ar = rotate_point(centre, A, angle)
     Br = rotate_point(centre, B, angle)
@@ -53,19 +134,48 @@ def rotate_line(centre, angle, a, b):
 
 
 def point_distance(A, B):
+    """Distance between two points.
+
+    Args:
+        A (np.array): First point
+        B (np.array): Second point
+
+    Returns:
+        float: Distance between the points.
+    """
     return np.linalg.norm(A - B)
 
 
 def line_distance(P, slope, intercept):
-    return np.linalg.norm(P - closest_point(P, slope, intercept))
+    """Distance between point and line.
+
+    Args:
+        P (np.array): Point
+        slope: Gradient of line
+        intercept: y-intercept of line.
+
+    Returns:
+        float: Distance between the point and the line
+    """
+    return point_distance(P, closest_point(P, slope, intercept))
 
 
 def angle_distance(alpha, beta):
+    """Get the smallest angle distance between two angles (i.e. distance between 350 and 10 is 20).
+
+    Args:
+        alpha (float): First angle
+        beta (float): Second angle
+
+    Returns:
+        Distance between the two angles.
+    """
     phi = abs(beta - alpha) % 360  # This is either the distance or 360 - distance
     if phi > 180:
         return 360 - phi
     else:
         return phi
+
 
 def normal(gradient):
     n = np.array([-gradient, 1])
