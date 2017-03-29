@@ -1,14 +1,14 @@
 import time
 import math
 import numpy as np
-import algebra
+from server import algebra
 import random
 import threading
-from robot import State
+from server.robot import State
 
 
 class Communication(threading.Thread):
-    def __init__(self):
+    def __init__(self, robot, map):
         threading.Thread.__init__(self)
 
         self.state = State()
@@ -24,9 +24,68 @@ class Communication(threading.Thread):
         self.y = 0.0
 
         self.error = [0,0]
+        self.measurements = []
+        self.running = True
+
+        self.robot = robot
+        self.map = map
 
     def run(self):
-        pass
+        while self.running:
+            if time.time() - self.current < 0.02:
+                time.sleep(0.02)
+
+            new = time.time()
+            delta_time = new - self.current
+
+            if self.rotating:
+                self.heading += self.speed * delta_time * 0.4
+            else:
+                distance = self.speed * delta_time * 0.1
+                self.x += distance * math.cos(math.radians(self.heading))
+                self.y += distance * math.sin(math.radians(self.heading))
+
+            location = np.array([self.x, self.y])
+            moved = location - self.state.location
+            delta = algebra.rotate_point(np.zeros(2), moved, self.adjustment.heading) - moved
+
+            # Update the state and adjustment
+            self.state.update(location, self.heading)
+            self.adjustment.delta(delta)
+            self.adjusted = self.state + self.adjustment
+
+            t = self.current
+            m = 180
+            angle = m - abs(t * 150 % (2 * m) - m) - 90
+
+            RY = 80
+            RX = 90
+
+            if 90 < (angle + self.heading) % 360 <= 270:
+                FA = abs((RX + self.x) / math.cos(math.radians(angle + self.heading))) + 4 * random.random()
+                RA = abs((RX - self.x) / math.cos(math.radians(angle + self.heading))) + 4 * random.random()
+            else:
+                FA = abs((RX - self.x) / math.cos(math.radians(angle + self.heading))) + 4 * random.random()
+                RA = abs((RX + self.x) / math.cos(math.radians(angle + self.heading))) + 4 * random.random()
+
+            if 180 < (angle + self.heading) % 360 <= 360:
+                FB = abs((RY + self.y) / math.sin(math.radians(angle + self.heading))) + 4 * random.random()
+                RB = abs((RY - self.y) / math.sin(math.radians(angle + self.heading))) + 4 * random.random()
+            else:
+                FB = abs((RY - self.y) / math.sin(math.radians(angle + self.heading))) + 4 * random.random()
+                RB = abs((RY + self.y) / math.sin(math.radians(angle + self.heading))) + 4 * random.random()
+
+            F = min(FA, FB)
+            R = min(RA, RB)
+
+            front = F if (F < 100) else 255
+            rear = R if (R < 100) else 255
+
+            # Append measurements for front and rear sensors.
+            measurements = [m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if m.distance < 255]
+            self.map.plot_measurements(measurements)
+
+            self.current = new
 
     def sense(self):
         """Access the measurements recieved since the last sense, update the robot's state, and return
@@ -35,77 +94,9 @@ class Communication(threading.Thread):
         Returns:
             list: List of measurements.
         """
-        if time.time() - self.current < 0.02:
-            time.sleep(0.02)
-
-        new = time.time()
-        delta_time = new - self.current
-        
-        if self.rotating:
-            self.heading += self.speed * delta_time * 0.4
-        else:
-            distance = self.speed * delta_time * 0.1
-            self.x += distance * math.cos(math.radians(self.heading))
-            self.y += distance * math.sin(math.radians(self.heading))
-
-        location = np.array([self.x, self.y])
-        moved = location - self.state.location
-        delta = algebra.rotate_point(np.zeros(2), moved, self.adjustment.heading) - moved
-
-        # Update the state and adjustment
-        self.state.update(location, self.heading)
-        self.adjustment.delta(delta)
-        self.adjusted = self.state + self.adjustment
-
-        if self.speed:
-            pass
-            #self.error[0] = self.error[0] + random.random()-0.5
-            #self.error[1] = self.error[1] + random.random()-0.5
-
-
-
-        t = self.current
-        m = 180
-        angle = m - abs(t*150 % (2*m) - m) - 90
-        dxr = 80 - self.x - self.error[0] + 2*random.random()
-        dxl = 80 + self.x + self.error[0] + 2*random.random()
-        dyb = 80 - self.y - self.error[1] + 2*random.random()
-        dyt = 80 + self.y + self.error[1] + 2*random.random()
-
-        FA = 0
-        RA = 0
-        FB = 0
-        RB = 0
-        R = 80
-
-        if 90 < (angle + self.heading) % 360 <= 270:
-            FA = abs((R + self.x)/math.cos(math.radians(angle + self.heading)))
-            RA = abs((R - self.x)/math.cos(math.radians(angle + self.heading)))
-        else:
-            FA = abs((R - self.x)/math.cos(math.radians(angle + self.heading)))
-            RA = abs((R + self.x)/math.cos(math.radians(angle + self.heading)))
-
-        if 180 < (angle + self.heading) % 360 <= 360:
-            FB = abs((R - self.y)/math.sin(math.radians(angle + self.heading)))
-            RB = abs((R + self.y)/math.sin(math.radians(angle + self.heading)))
-        else:
-            FB = abs((R + self.y)/math.sin(math.radians(angle + self.heading)))
-            RB = abs((R - self.y)/math.sin(math.radians(angle + self.heading)))
-
-
-        F = min(FA, FB)
-        R = min(RA, RB)
-
-        front = F if (F < 100) else 255
-        rear = R if (R < 100) else 255
-
-        # Append measurements for front and rear sensors.
-        measurements = []
-        measurements.append((self.x, self.y, self.heading, angle*2 % 360, front, rear))
-
-        self.current = new
-
-        return measurements
+        result = list(self.measurements)
+        self.measurements = []
+        return result
 
     def senses(self, n):
         measurements = []
@@ -122,7 +113,7 @@ class Communication(threading.Thread):
 
     def stop(self):
         """Tells robot to stop"""
-        pass
+        self.running = False
 
     def pause(self):
         """Tells robot to pause sensing"""

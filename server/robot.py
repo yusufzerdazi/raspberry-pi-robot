@@ -2,7 +2,7 @@ import math
 import time
 import numpy as np
 
-import algebra
+from server import algebra
 
 
 class State(object):
@@ -80,19 +80,6 @@ class Measurement(object):
         self.location = self.state.location + algebra.pol_to_cart(self.distance, self.angle+self.state.heading)
 
 
-class RobotState(object):
-    """Main class for the robot.
-    
-    Attributes:
-        state (State): Raw measured state.
-        adjusted (State): State combined with adjustment.
-    """
-    def __init__(self, state, adjusted):
-        """Initialise robot object."""
-        self.state = state
-        self.adjusted = adjusted
-
-
 class Robot(object):
     """Main class for the robot.
     
@@ -100,7 +87,7 @@ class Robot(object):
         state (State): Raw measured state.
         adjustment (State): SLAM adjustment.
         adjusted (State): State combined with adjustment.
-        communication: Object to communicate with Raspberry Pi.
+        measurements (list): Array of observed measurements.
     """
     def __init__(self):
         """Initialise robot object."""
@@ -109,31 +96,32 @@ class Robot(object):
         self.adjusted = self.state + self.adjustment
         self.measurements = []
 
-    def update(self, observations):
+    def update(self, observation):
         """Access the measurements recieved since the last sense, update the robot's state, and return them as a list of
         Measurement objects.
 
         Returns:
             list: List of measurements.
         """
-        for x, y, heading, angle, front, rear in observations:
-            #  Need to update adjustment if the angle has changed due to SLAM.
-            location = np.array([x, y])  # Convert to np.array.
-            change = location - self.state.location  # Change in location.
-            adjusted = algebra.rotate_point(np.zeros(2), change, self.adjustment.heading)  # Adjusted change in location
-            delta = adjusted - change  # Change in adjustment.
+        x, y, heading, angle, front, rear = observation
 
-            # Update the state and adjustment
-            self.state.update(location, heading)
-            self.adjustment.delta(delta)
-            self.adjusted = self.state + self.adjustment
+        #  Need to update adjustment if the angle has changed due to SLAM.
+        location = np.array([x, y])  # Convert to np.array.
+        change = location - self.state.location  # Change in location.
+        adjusted = algebra.rotate_point(np.zeros(2), change, self.adjustment.heading)  # Adjusted change in location
+        delta = adjusted - change  # Change in adjustment.
 
-            # Append measurements for front and rear sensors.
-            self.measurements.append(Measurement(self.adjusted, (angle/2) % 360, front))
-            self.measurements.append(Measurement(self.adjusted, (angle/2 + 180) % 360, rear))
+        # Update the state and adjustment
+        self.state.update(location, heading)
+        self.adjustment.delta(delta)
+        self.adjusted = self.state + self.adjustment
 
-        while len(self.measurements) > 1000:
-            self.measurements.pop(0)
+        # Append measurements for front and rear sensors.
+        measurements = []
+        measurements.append(Measurement(self.adjusted, (angle/2) % 360, front))
+        measurements.append(Measurement(self.adjusted, (angle/2 + 180) % 360, rear))
+        self.measurements.extend([m for m in measurements if m.distance < 255])
+        return measurements
 
     def reset(self):
         self.measurements = []

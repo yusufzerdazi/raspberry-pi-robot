@@ -2,23 +2,25 @@ import socket
 import threading
 
 # Socket variables
-UDP_IP = "192.168.137.29"  # UDP IP Address
+UDP_IP = "192.168.137.29"
 UDP_PORT = 5005
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.bind(("", UDP_PORT))
+
 
 class Communication(threading.Thread):
     """Class for communicating with Raspberry Pi.
 
     Attributes:
         running (bool): True when the socket is open.
-        data (list): Measurements recieved since last sensed.
+        measurements (list): Measurements received since last sensed.
     """
-    def __init__(self):
+    def __init__(self, robot):
         """Initialise Communication object."""
         threading.Thread.__init__(self)
         self.running = True
         self.measurements = []
+        self.robot = robot
 
     def run(self):
         """Thread loop."""
@@ -28,14 +30,10 @@ class Communication(threading.Thread):
             self.measurements.append(tuple(float(x) for x in decoded))  # Append to list
         SOCK.close()
 
-    def reset(self):
-        """Empty array of measurements."""
-        self.measurements = []
-
     def sense(self):
         """Get measurements since last time sensing."""
         temp = list(self.measurements)
-        self.reset()
+        self.measurements = []
         return temp
 
     def move(self, power, rotate):

@@ -1,23 +1,38 @@
 import sys
 import math
-import time
+import threading
+import enum
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PIL import Image, ImageDraw, ImageQt, ImageChops
+from PIL import Image, ImageDraw, ImageQt
 
-import robot_simulator as communication
-import robot
-import slam
-import algebra
-import copy
+#from server import communication
+import server.robot_simulator as communication
+from server import robot
+from server import slam
 
 
-WIDTH = 1920
-HEIGHT = 1080
+WIDTH = 2000
+HEIGHT = 2000
 SPEED = 180
-ORIGIN = np.array([WIDTH/2, HEIGHT/2])
-ORIGIN_STATE = robot.State(ORIGIN)
+
+
+class TrackingMode(enum.Enum):
+    FREE = 0
+    STATE = 1
+    ADJUSTED = 2
+
+
+class ViewMode(enum.Enum):
+    STATE = 0
+    ADJUSTED = 1
+
+
+class ProbabilityMode(enum.Enum):
+    PROBABILITIES = 0
+    SLAM_PROBABILITIES = 1
+    PRIOR_PROBABILITIES = 3
 
 
 class MapViewer(QtWidgets.QMainWindow):
@@ -27,7 +42,7 @@ class MapViewer(QtWidgets.QMainWindow):
         map (Map): Map object.
         robot (robot.Robot): Robot object
         slam (slam.Slam): Slam object
-        scale (float): Zoom factor for map.
+        view_scale (float): Zoom factor for map.
         controlled (bool): Keyboard or automatic robot movement.
         image (PIL.Image): Image to display on screen.
         distribution (PIL.Image): Probability distribution history from SLAM.
@@ -41,16 +56,17 @@ class MapViewer(QtWidgets.QMainWindow):
         super(MapViewer, self).__init__()
 
         # Map attributes
-        self.scale = 5.0  # Zoom factor.
+
         self.controlled = controlled  # Remote controlled.
-        self.image = None  # Displayed image.
         self.distribution = False  # Whether to display probability distribution or map.
 
         # Robot attributes.
         self.map = Map(WIDTH, HEIGHT)  # Initialise map.
+        self.image = self.map.view_images[ViewMode.ADJUSTED]  # Displayed image.
         self.robot = robot.Robot()  # Initialise robot.
 
-        self.communication = communication.Communication()
+
+        self.communication = communication.Communication(self.robot, self.map)
         self.communication.start()
 
         self.slam = slam.Slam(self.robot, self.map, self.communication, self.controlled)  # Initialise SLAM.
@@ -71,16 +87,19 @@ class MapViewer(QtWidgets.QMainWindow):
         self.setWindowTitle("Robot Map")  # Set title.
         self.showFullScreen()  # Make fullscreen.
 
+        self.dimensions = np.array([self.scrollArea.frameGeometry().width(),
+                                    self.scrollArea.frameGeometry().height()])
+        self.view_centre = np.array([0,0])
+        self.view_scale = 5.0
+        self.mouse_pos = self.view_centre
+        self.tracking_mode = TrackingMode.FREE
+
         # Set up image refresh timer.
         timer = QtCore.QTimer(self)
-        timer.timeout.connect(self.open)
+        timer.timeout.connect(self.display)
         timer.start(33)  # 30 Hz
 
-    def open(self):
-        """Loop for displaying image."""
-        self.update()  # Update robot.
-        self.crop()  # Crop and adjust image.
-        self.display()  # Display image.
+        threading.Thread(target=self.crop).start()
 
     def update(self):
         observations = self.communication.sense()
@@ -89,20 +108,46 @@ class MapViewer(QtWidgets.QMainWindow):
         self.map.plot_trail(self.robot.adjusted, (255,0,0,127))
 
     def crop(self):
-        """Combine sub-images, and crop based on the scale factor."""
-        size = np.array([int(WIDTH/(self.scale*2)), int(HEIGHT/(self.scale*2))])  # Size of cropped window.
-        crop_box = tuple(np.append(ORIGIN + self.robot.adjusted.location - size,
-                                   ORIGIN + self.robot.adjusted.location + size))  # Crop box
-
-        self.map.plot_state(self.robot.state)  # Plot robot from raw data.
-        self.map.plot_state(self.robot.adjusted, True)  # Plot SLAM adjusted robot.
-        self.image = self.map.combine_with_state(self.distribution).crop(crop_box).resize((1920,1080))  # Update image.
+        while True:
+            """Combine sub-images, and crop based on the scale factor."""
+            if self.tracking_mode == TrackingMode.ADJUSTED:
+                self.view_centre = self.robot.adjusted.location
+            elif self.tracking_mode == TrackingMode.STATE:
+                self.view_centre = self.robot.state.location
+            size = self.dimensions / (self.view_scale * 2)  # Size of cropped window.
+            crop_box = tuple(np.append(self.map.origin + self.view_centre - size,
+                                       self.map.origin + self.view_centre + size))  # Crop box
+            image = self.map.combine(self.robot, self.slam.landmarks)
+            self.image = image.crop(crop_box).resize(self.dimensions)  # Update image.
 
     def display(self):
         """Convert PIL to ImageQt, and display on screen."""
         image_qt = ImageQt.ImageQt(self.image)
         self.imageLabel.setPixmap(QtGui.QPixmap.fromImage(image_qt))
         self.imageLabel.adjustSize()
+
+    def wheelEvent(self, event):
+        """Zoom in/out"""
+        degrees = event.angleDelta().y() / 8
+        steps = degrees / 15
+        self.view_scale *= 1.5 ** steps
+
+    def mouseMoveEvent(self, event):
+        """Allow dragging of the map to move the view window, when free tracking is enabled."""
+        if self.tracking_mode == TrackingMode.FREE and event.buttons() == QtCore.Qt.LeftButton:
+
+            # Calculate the change in mouse position.
+            new_mouse_pos = np.array([event.x(), event.y()])
+            mouse_delta = new_mouse_pos - self.mouse_pos
+
+            # Add this to the view centre.
+            self.view_centre = self.view_centre - mouse_delta * (1 / self.view_scale)
+            self.mouse_pos = new_mouse_pos
+
+    def mousePressEvent(self, event):
+        """Set the mouse start location, so movement delta can be calculated."""
+        if event.buttons() == QtCore.Qt.LeftButton:
+            self.mouse_pos = np.array([event.x(), event.y()])
 
     def keyPressEvent(self, event):
         """Detect when a key is pressed, and perform the relevent function.
@@ -121,13 +166,23 @@ class MapViewer(QtWidgets.QMainWindow):
         # Clear the screen.
         elif key == QtCore.Qt.Key_Q:
             self.map.clear()
+        elif key == QtCore.Qt.Key_1:
+            self.tracking_mode = TrackingMode.FREE
+        elif key == QtCore.Qt.Key_2:
+            self.tracking_mode = TrackingMode.ADJUSTED
+        elif key == QtCore.Qt.Key_3:
+            self.tracking_mode = TrackingMode.STATE
 
-        # Zoom out.
-        elif key == QtCore.Qt.Key_Equal:
-            self.scale = self.scale * 1.5
-        # Zoom in.
-        elif key == QtCore.Qt.Key_Minus:
-            self.scale = self.scale / 1.5
+        elif key == QtCore.Qt.Key_8:
+            self.map.probability_mode = ProbabilityMode.SLAM_PROBABILITIES
+        elif key == QtCore.Qt.Key_9:
+            self.map.probability_mode = ProbabilityMode.PRIOR_PROBABILITIES
+        elif key == QtCore.Qt.Key_0:
+            self.map.probability_mode = ProbabilityMode.PROBABILITIES
+
+        # Toggle between probability distribution and map.
+        elif key == QtCore.Qt.Key_P:
+            self.map.probabilities = not self.map.probabilities
 
         # Remote control commands.
         elif self.controlled:
@@ -154,32 +209,16 @@ class MapViewer(QtWidgets.QMainWindow):
             elif key == QtCore.Qt.Key_C:
                 self.communication.resume()
 
-            # Toggle between probability distribution and map.
-            elif key == QtCore.Qt.Key_P:
-                self.distribution = not self.distribution
-
             # Perform SLAM iteration.
             elif key == QtCore.Qt.Key_Return:  
                 self.slam.resume()
-                """self.d = True
-                self.robot.resume()
-                self.robot.sense()
-                measurements = []
-                while len(measurements) < 1000:
-                    sense = self.robot.sense()
-                    for new in sense:
-                        measurements.append(new)
-                        self.map.plot_measurement(new)
-                        print(str(new.angle) + ", " + str(new.distance))
-                self.d=False
-                self.robot.pause()"""
 
 
 class Map(object):
     """Map class, composed of a number of PIL images, for tracking objects and landmarks.
 
     Attributes:
-        image (PIL.Image): Grey image for background.
+        state (PIL.Image): Grey image for background.
         objects (PIL.Image): Transparent image for obstacles.
         space (PIL.Image): Transparent image for detected free space.
         state (PIL.Image): Transparent image for raw robot state.
@@ -191,24 +230,32 @@ class Map(object):
         points (bool): Use points for measurements.
 
     """
-    def __init__(self, width, height, points=True):
+    def __init__(self, width, height):
         """Initialise map object.
 
         Args:
             width: Width of grid.
             height: Height of grid.
-            points: Whether to use points or arcs.
         """
-        self.image = Image.new("RGBA", (WIDTH, HEIGHT), (128,128,128,255))  # The grey background
-        self.objects = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for obstacle detection
-        self.space = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for free space
-        self.state = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for robot state
-        self.adjusted_state = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for robot state
-        self.landmarks = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for landmarks
-        self.probabilities = Image.new("RGBA", (WIDTH, HEIGHT), (255,255,255,255))  # Image for landmarks
-        self.trail = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for robot trail
-        self.arc = 6
-        self.points = points
+        self.scanning = False
+        self.view_mode = ViewMode.ADJUSTED
+        self.probability_mode = ProbabilityMode.PROBABILITIES
+        self.origin = np.array([width/2, height/2])
+        self.display = Image.new("RGBA", (WIDTH, HEIGHT), (128, 128, 128))
+        self.probabilities = False
+
+        self.state_colour = (0, 0, 255)
+        self.adjusted_colour = (255, 0, 0)
+        self.view_images = {
+            ViewMode.ADJUSTED: Image.new("RGBA", (WIDTH, HEIGHT), (128, 128, 128)),
+            ViewMode.STATE: Image.new("RGBA", (WIDTH, HEIGHT), (128, 128, 128))
+        }
+
+        self.probability_images = {
+            ProbabilityMode.PROBABILITIES: Image.new("RGBA", (WIDTH, HEIGHT), (255,255,255)),
+            ProbabilityMode.SLAM_PROBABILITIES: Image.new("RGBA", (WIDTH, HEIGHT), (255,255,255)),
+            ProbabilityMode.PRIOR_PROBABILITIES: Image.new("RGBA", (WIDTH, HEIGHT), (255,255,255))
+        }
 
     def plot_measurements(self, measurements):
         """Plot a list of measurements.
@@ -219,76 +266,52 @@ class Map(object):
         for measurement in measurements:
             self.plot_measurement(measurement)
 
-    def plot_measurement(self, measurement, colour=(0,0,0,100)):
+    def plot_measurement(self, measurement, colour=(100,100,100)):
         """Plot a measurements.
 
         Args:
             measurement (Measurement): Measurement to plot.
             colour (tuple): Colour to plot the measurement, in RGBA format.
         """
-        objects = ImageDraw.Draw(self.objects)
-        space = ImageDraw.Draw(self.space)
+        draw = ImageDraw.Draw(self.view_images[ViewMode.ADJUSTED])
 
-        location = measurement.state.location + ORIGIN
-        end_location = measurement.location + ORIGIN
+        location = measurement.state.location + self.origin
+        end_location = measurement.location + self.origin
 
-        # Bounding box for arc. Add 1 so that it doesn't intersect the pie.
-        arc_box = ((location[0]-(measurement.distance+1), location[1]-(measurement.distance+1)),
-                   (location[0]+(measurement.distance+1), location[1]+(measurement.distance+1)))
+        # Bounding box for measurement
+        radius = 2
+        measurement_box = ((end_location[0]-radius, end_location[1]-radius),
+                     (end_location[0]+radius, end_location[1]+radius))
 
-        # Bounding box for pie.
-        pie_box = ((location[0]-measurement.distance, location[1]-measurement.distance),
-                   (location[0]+measurement.distance, location[1]+measurement.distance))
+        draw.line(((location[0], location[1]), (end_location[0], end_location[1])), fill=(200+self.scanning*55,200+self.scanning*55,200+self.scanning*55))
+        draw.ellipse(measurement_box, fill=colour)
 
-        direction = math.degrees(measurement.angle + measurement.state.heading) # Absolute robot direction
-        start_angle = direction - self.arc # Pie start angle
-        end_angle = direction + self.arc # Pie end angle
+    def plot_states(self, robot):
+        self.plot_state(robot.state, self.state_colour)
+        self.plot_state(robot.adjusted, self.adjusted_colour)
 
-        if not self.points:
-            objects.arc(arc_box, start_angle, end_angle, fill="black") # Draw arc
-            space.pieslice(pie_box, start_angle, end_angle, fill="white") # Draw pie
-        else:
-            # Bounding box for measurement
-            radius = 2
-            measurement_box = ((end_location[0]-radius, end_location[1]-radius),
-                         (end_location[0]+radius, end_location[1]+radius))
-
-            space.line(((location[0], location[1]), (end_location[0], end_location[1])), fill=(255,255,255,100))
-            space.ellipse(measurement_box, fill=colour)
-        
-
-    def plot_state(self, state, adjusted=False):
+    def plot_state(self, state, colour):
         """Plot the location and direction of the robot.
 
         Args:
             state (State): Robot state.
-            adjusted (bool): Plotting raw robot or SLAM adjusted robot.
+            colour (tuple): Colour to plot the state.
         """
-        draw = None
-        colour = None
-        state += ORIGIN_STATE
-        if adjusted:
-            self.adjusted_state = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0)) # Clear state image
-            draw = ImageDraw.Draw(self.adjusted_state)
-            colour = (255,0,0,127)
-        else:
-            self.state = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0)) # Clear state image
-            draw = ImageDraw.Draw(self.state)
-            colour = (0,0,255,127)
+        draw = ImageDraw.Draw(self.display)
         
         # Calculate the x and y lengths for the robot direction
-        end_x = state.location[0] + 50 * math.cos(math.radians(state.heading))
-        end_y = state.location[1] + 50 * math.sin(math.radians(state.heading))
+        end_x = self.origin[0] + state.location[0] + 50 * math.cos(math.radians(state.heading))
+        end_y = self.origin[1] + state.location[1] + 50 * math.sin(math.radians(state.heading))
 
         radius = 3
 
         # Bounding box for robot
-        robot_box = ((state.location[0]-radius, state.location[1]-radius),
-                     (state.location[0]+radius, state.location[1]+radius))
+        robot_box = (tuple(state.location + self.origin - radius),
+                     tuple(state.location + self.origin + radius))
 
         # Plot non-adjusted state
         draw.ellipse(robot_box, fill=colour)
-        draw.line(((state.location[0], state.location[1]), (end_x, end_y)), fill=colour)
+        draw.line((tuple(state.location + self.origin), (end_x, end_y)), fill=colour)
 
         # Clockwise part of arrow head
         cw_x = end_x + 10 * math.cos(math.radians(state.heading + 135))
@@ -302,7 +325,6 @@ class Map(object):
         draw.line((end_x, end_y, cw_x, cw_y), fill=colour)
         draw.line((end_x, end_y, ccw_x, ccw_y), fill=colour)
 
-
     def plot_trail(self, state, colour):
         """Plot the current location of the robot as a single pixel.
 
@@ -310,8 +332,12 @@ class Map(object):
             state (State): Robot state.
             colour (tuple): Colour to plot the state of the robot.
         """
-        trail = ImageDraw.Draw(self.trail)
-        trail.point(tuple((state.location+ORIGIN).astype(int)), fill=colour)
+        trail = ImageDraw.Draw(self.display)
+        trail.point(tuple((state.location+self.origin).astype(int)), fill=colour)
+
+    def plot_landmarks(self, landmarks, state, colour):
+        for landmark in landmarks:
+            self.plot_landmark(landmark, state, colour)
 
     def plot_landmark(self, landmark, state, colour=(0,0,0,255)):
         """Plot a landmark as a triangle, where the two ends of the landmarks are two corners, and the robot is the
@@ -320,47 +346,53 @@ class Map(object):
         Args:
             landmark (Landmark): Landmark to plot.
             state (Robot): State of the robot.
+            colour (tuple): Colour to plot the landmark
         """
-        draw = ImageDraw.Draw(self.landmarks)
+        draw = ImageDraw.Draw(self.display)
 
-        draw.polygon((tuple(ORIGIN+state.location),tuple((ORIGIN+landmark.start).astype(int)),
-                      tuple((ORIGIN+landmark.end).astype(int))), fill=(255,255,255,255))
+        #draw.polygon((tuple(ORIGIN+state.location),tuple((ORIGIN+landmark.segment[0]).astype(int)),
+        #              tuple((ORIGIN+landmark.segment[1]).astype(int))), fill=(255,255,255,255))
 
-        draw.line((tuple((ORIGIN+landmark.start).astype(int)),
-                   tuple((ORIGIN+landmark.end).astype(int))), fill=colour)
+        draw.line((tuple((self.origin+landmark.segment[0]).astype(int)),
+                   tuple((self.origin+landmark.segment[1]).astype(int))), fill=colour)
 
-    def plot_prob_dist(self, dist):
+    def plot_prob_dist(self, dist, dist_type, normalise=True):
         """Given a dictionary mapping coordinates to probability values, plot this distribution, where darker values
         represent more likely locations.
 
         Args:
             dist (dict): Probability distribution.
+            dist_type (ProbabilityMode): Probability mode.
+            normalise (bool): Normalise the values so smallest show up as white and largest as black.
         """
-        draw = ImageDraw.Draw(self.probabilities)
+        draw = ImageDraw.Draw(self.probability_images[dist_type])
+        max_prob = 1
+        min_prob = 0
+
+        values = list(dist.values())
+        if len(values) > 0 and sum(values) > 0:
+            max_prob = max(values)
+            if normalise and min(values) != max_prob:
+                min_prob = min(values)
+
         for key in dist:
-            draw.point((ORIGIN[0]+key[0], ORIGIN[1]+key[1]), fill=(int(255-255*dist[key]), 
-                                                                   int(255-255*dist[key]), 
-                                                                   int(255-255*dist[key]), 255))
+            value = int(255 - 255 * ((dist[key] - min_prob) / (max_prob - min_prob)))
+            draw.point(tuple(self.origin + np.array(key)), fill=(value, value, value))
 
     def clear(self):
-        """Clears objects and space."""
-        self.objects = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for obstacle detection
-        self.space = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))  # Image for free space
+        self.view_images = {
+            ViewMode.ADJUSTED: Image.new("RGBA", (WIDTH, HEIGHT), (128, 128, 128)),
+            ViewMode.STATE: Image.new("RGBA", (WIDTH, HEIGHT), (128, 128, 128))
+        }
 
-    def combine(self):
-        """Returns composite of above images."""
-        return Image.alpha_composite(self.image, Image.alpha_composite(self.space, 
-            Image.alpha_composite(self.objects, self.landmarks)))
-
-    def combine_with_state(self, dist):
-        """Returns above composite with robot state overlayed on top.
-
-        Args:
-            dist (bool): Display probability distribution instead of map."""
-        if dist:
-            return self.probabilities
-        return Image.alpha_composite(self.combine(), Image.alpha_composite(self.state,
-            Image.alpha_composite(self.adjusted_state, self.trail)))
+    def combine(self, robot, landmarks):
+        if self.probabilities:
+            return self.probability_images[self.probability_mode]
+        else:
+            self.display = self.view_images[self.view_mode].copy()
+            self.plot_landmarks(landmarks, robot.adjusted, colour=(0,0,0))
+            self.plot_states(robot)
+            return self.display
 
 
 if __name__ == "__main__":
