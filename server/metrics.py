@@ -1,11 +1,15 @@
 import math
 import numpy
 
-from server.algebra import dist
-from server.algebra import length
+from server.util import dist
+from server.util import length
 
 
 def frechet_distance(first, second):
+    return min(ordered_frechet_distance(first, second), ordered_frechet_distance(second, first))
+
+
+def ordered_frechet_distance(first, second):
     """Computes the discrete frechet distance between two polygonal lines
     Algorithm: http://www.kr.tuwien.ac.at/staff/eiter/et-archive/cdtr9464.pdf
     P and Q are arrays of 2-element arrays (points)
@@ -40,7 +44,7 @@ def hausdorff_distance(first, second):
     c = point_segment_distance(second[0], first)
     d = point_segment_distance(second[1], first)
 
-    return max(a, b, c, d)
+    return max(max(a, b), max(c, d))
 
 
 def straight_line_distance(first, second):
@@ -80,7 +84,7 @@ def min_distance(first, second):
     Returns:
         float: Minimum distance.
     """
-    if segments_intersect(first, second):
+    if not segments_intersect(first, second) is None:
         return 0.0
     distances = []
     for s, t in [[first, second], [second, first]]:
@@ -99,7 +103,7 @@ def perpendicular_distance(first, second):
     Returns:
         float: Perpendicular distance.
     """
-    if segments_intersect(first, second):
+    if not segments_intersect(first, second) is None:
         return 0.0
     distances = []
     for s, t in [[first, second], [second, first]]:
@@ -138,6 +142,12 @@ def midpoint_distance(first, second):
                dist(first[0], second[1]) + dist(first[1], second[0])) + 3 * dist(first_mid, second_mid)
 
 
+def origin_distance(first, second):
+    first_origin = perpendicular_point(numpy.zeros(2), first)
+    second_origin = perpendicular_point(numpy.zeros(2), second)
+    return dist(first_origin, second_origin)
+
+
 def segments_intersect(first, second):
     """Determine whether two segments in the plane intersect.
     Args:
@@ -153,10 +163,15 @@ def segments_intersect(first, second):
     dy2 = second[1][1] - second[0][1]
     delta = dx2 * dy1 - dy2 * dx1
     if delta == 0:
-        return False  # parallel segments
+        if numpy.any([numpy.array_equal(first[i], second[j]) for i in range(2) for j in range(2)]):
+            return None
+        return None  # parallel segments
     s = (dx1 * (second[0][1] - first[0][1]) + dy1 * (first[0][0] - second[0][0])) / delta
     t = (dx2 * (first[0][1] - second[0][1]) + dy2 * (second[0][0] - first[0][0])) / (-delta)
-    return (0 <= s <= 1) and (0 <= t <= 1)
+    if s < 0 or s > 1 or t < 0 or t > 1:
+        return None
+    else:
+        return numpy.array([first[0][0] + t * dx1, first[0][1] + t * dy1])
 
 
 def point_segment_distance(point, segment):
@@ -246,15 +261,10 @@ def angle(first, second):
     # Get nicer vector form
     v_first = numpy.array([(first[0][0] - first[1][0]), (first[0][1] - first[1][1])])
     v_second = numpy.array([(second[0][0] - second[1][0]), (second[0][1] - second[1][1])])
-    # Get dot prod
-    dot_prod = numpy.dot(v_first, v_second)
-    # Get magnitudes
-    mag_first = numpy.dot(v_first, v_first)**0.5
-    mag_second = numpy.dot(v_second, v_second)**0.5
-    # Get angle in radians and then convert to degrees
-    theta = math.acos(dot_prod/mag_second/mag_first)
-    if theta > math.pi / 2:
-        theta -= math.pi
+
+    theta = numpy.arctan2((v_first[0] * v_second[1]) - (v_first[1] * v_second[0]), (v_first[0] * v_second[0]) + (v_first[1] * v_second[1]))
+    if abs(theta) > math.pi / 2:
+        theta -= numpy.sign(theta)*math.pi
     return theta
 
-print(straight_line_distance([numpy.array([0,1]),numpy.array([0,0])], [numpy.array([0,1]),numpy.array([1,0])]))
+#print(straight_line_distance([numpy.array([0,0]),numpy.array([0,1])], [numpy.array([10,0]),numpy.array([0,1])]))

@@ -1,10 +1,11 @@
 import time
 import math
 import numpy as np
-from server import algebra
+from server import util
 import random
 import threading
 from server.robot import State
+from server.view import bayesian_estimation
 
 
 class Communication(threading.Thread):
@@ -17,6 +18,7 @@ class Communication(threading.Thread):
         self.current = time.time()
 
         self.rotating = False
+        self.spinning = True
         self.speed = 0
         self.heading = 0.0
         self.angle = 0.0
@@ -30,6 +32,8 @@ class Communication(threading.Thread):
         self.robot = robot
         self.map = map
 
+        self.error = 0.1
+
     def run(self):
         while self.running:
             if time.time() - self.current < 0.02:
@@ -42,12 +46,13 @@ class Communication(threading.Thread):
                 self.heading += self.speed * delta_time * 0.4
             else:
                 distance = self.speed * delta_time * 0.1
+                self.error -= 0.05 * bool(self.speed)
                 self.x += distance * math.cos(math.radians(self.heading))
                 self.y += distance * math.sin(math.radians(self.heading))
 
             location = np.array([self.x, self.y])
             moved = location - self.state.location
-            delta = algebra.rotate_point(np.zeros(2), moved, self.adjustment.heading) - moved
+            delta = util.rotate_point(np.zeros(2), moved, self.adjustment.heading) - moved
 
             # Update the state and adjustment
             self.state.update(location, self.heading)
@@ -80,10 +85,13 @@ class Communication(threading.Thread):
 
             front = F if (F < 100) else 255
             rear = R if (R < 100) else 255
-
-            # Append measurements for front and rear sensors.
-            measurements = [m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if m.distance < 255]
-            self.map.plot_measurements(measurements)
+            measurements = [m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if
+                            m.distance < 255]
+            if self.spinning:
+                # Append measurements for front and rear sensors.
+                #for measurement in measurements:
+                #    self.map.plot_prob_dist(bayesian_estimation(measurement), self.map.probability_mode.COMBINED_PROBABILITIES)
+                self.map.plot_measurements(measurements)
 
             self.current = new
 
@@ -117,8 +125,22 @@ class Communication(threading.Thread):
 
     def pause(self):
         """Tells robot to pause sensing"""
-        pass
+        self.spinning = False
 
     def resume(self):
         """Tells robot to resume sensing"""
-        pass
+        self.spinning = True
+
+    def turn(self, angle):
+        start = self.robot.adjusted.heading
+        self.move(np.sign(angle)*180, True)
+        while util.angle_diff(start, self.robot.adjusted.heading) < angle:
+            time.sleep(0.02)
+        self.move(0, False)
+
+    def drive(self, distance):
+        start = self.robot.adjusted.location
+        self.move(np.sign(distance)*180, False)
+        while util.dist(self.robot.adjusted.location, start) < distance:
+            time.sleep(0.02)
+        self.move(0, False)

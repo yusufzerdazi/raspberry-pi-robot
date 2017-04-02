@@ -1,5 +1,5 @@
 """Module that contains general functions for 2D algebraic manipulations."""
-
+import enum
 import math
 import numpy
 
@@ -73,26 +73,24 @@ def angle_diff(alpha, beta):
     return 360 - phi if phi > 180 else phi
 
 
-def rotate_point(centre, point, theta):
+def rotate_point(centre, point, angle):
     """Rotate a point counterclockwise by a given angle around a given centre.
 
     Args:
         centre (numpy.ndarray): Centre of rotation
         point (numpy.ndarray): Point to rotate
-        theta (float): Angle of rotation (in degrees)
+        angle (float): Angle of rotation (in degrees)
 
     Returns:
         numpy.ndarray: Rotated point
     """
-    delta = point - centre
-    c = math.cos(math.radians(theta))
-    s = math.sin(math.radians(theta))
+    ox, oy = centre
+    px, py = point
 
-    # Rotate with rotation matrix
-    rotation_matrix = numpy.array([[c, -s], [s, c]])
-    rotated = numpy.matmul(rotation_matrix, delta)
+    qx = ox + math.cos(math.radians(angle)) * (px - ox) - math.sin(math.radians(angle)) * (py - oy)
+    qy = oy + math.sin(math.radians(angle)) * (px - ox) + math.cos(math.radians(angle)) * (py - oy)
 
-    return rotated
+    return numpy.array([qx, qy])
 
 
 def rotate_points(centre, points, theta):
@@ -142,3 +140,23 @@ def normalise_distribution(d):
         return {key: d[key] / total for key in d}
     else:
         return {key: 1 / len(d) for key in d}
+
+
+class TrackingMode(enum.Enum):
+    FREE = 0
+    STATE = 1
+    ADJUSTED = 2
+
+
+class ViewMode(enum.Enum):
+    STATE = 0
+    ADJUSTED = 1
+    LOCAL = 2
+
+
+class ProbabilityMode(enum.Enum):
+    COMBINED_PROBABILITIES = 0
+    SLAM_PROBABILITIES = 1
+    PRIOR_PROBABILITIES = 3
+    GLOBAL_MAP = 4
+    LOCAL_MAP = 5

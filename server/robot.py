@@ -2,7 +2,7 @@ import math
 import time
 import numpy as np
 
-from server import algebra
+from server import util
 
 
 class State(object):
@@ -77,7 +77,7 @@ class Measurement(object):
         self.state = state
         self.angle = angle
         self.distance = distance
-        self.location = self.state.location + algebra.pol_to_cart(self.distance, self.angle+self.state.heading)
+        self.location = self.state.location + util.pol_to_cart(self.distance, self.angle + self.state.heading)
 
 
 class Robot(object):
@@ -108,7 +108,7 @@ class Robot(object):
         #  Need to update adjustment if the angle has changed due to SLAM.
         location = np.array([x, y])  # Convert to np.array.
         change = location - self.state.location  # Change in location.
-        adjusted = algebra.rotate_point(np.zeros(2), change, self.adjustment.heading)  # Adjusted change in location
+        adjusted = util.rotate_point(np.zeros(2), change, self.adjustment.heading)  # Adjusted change in location
         delta = adjusted - change  # Change in adjustment.
 
         # Update the state and adjustment
@@ -120,8 +120,9 @@ class Robot(object):
         measurements = []
         measurements.append(Measurement(self.adjusted, (angle/2) % 360, front))
         measurements.append(Measurement(self.adjusted, (angle/2 + 180) % 360, rear))
-        self.measurements.extend([m for m in measurements if m.distance < 255])
-        return measurements
+        non_extreme = [m for m in measurements if m.distance < 255]
+        self.measurements.extend(non_extreme)
+        return non_extreme
 
     def reset(self):
         self.measurements = []
