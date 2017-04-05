@@ -8,8 +8,8 @@ from server.robot import State
 from server.view import bayesian_estimation
 
 
-class Communication(threading.Thread):
-    def __init__(self, robot, map):
+class Comm(threading.Thread):
+    def __init__(self, robot):
         threading.Thread.__init__(self)
 
         self.state = State()
@@ -85,17 +85,12 @@ class Communication(threading.Thread):
 
             front = F if (F < 100) else 255
             rear = R if (R < 100) else 255
-            measurements = [m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if
-                            m.distance < 255]
-            if self.spinning:
-                # Append measurements for front and rear sensors.
-                #for measurement in measurements:
-                #    self.map.plot_prob_dist(bayesian_estimation(measurement), self.map.probability_mode.COMBINED_PROBABILITIES)
-                self.map.plot_measurements(measurements)
+            self.measurements.extend([m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if
+                            m.distance < 255])
 
             self.current = new
 
-    def sense(self):
+    def get_measurements(self):
         """Access the measurements recieved since the last sense, update the robot's state, and return
         them as a list of Measurement objects.
 
@@ -109,7 +104,7 @@ class Communication(threading.Thread):
     def senses(self, n):
         measurements = []
         while len(measurements) < n:
-            new = self.sense()
+            new = self.get_measurements()
             measurements.extend([m for m in new if m.distance not in [-1, 255]])
         return measurements
 
@@ -140,7 +135,7 @@ class Communication(threading.Thread):
 
     def drive(self, distance):
         start = self.robot.adjusted.location
-        self.move(np.sign(distance)*180, False)
+        self.move(np.sign(distance)*100, False)
         while util.dist(self.robot.adjusted.location, start) < distance:
             time.sleep(0.02)
         self.move(0, False)

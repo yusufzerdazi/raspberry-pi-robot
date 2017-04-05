@@ -80,7 +80,7 @@ class Measurement(object):
         self.location = self.state.location + util.pol_to_cart(self.distance, self.angle + self.state.heading)
 
 
-class Robot(object):
+class Bot(object):
     """Main class for the robot.
     
     Attributes:

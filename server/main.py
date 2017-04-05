@@ -6,11 +6,9 @@ from PIL import ImageQt
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 import server.robot_simulator as communication
-from server import model
-from server import communication
+#from server import communication
 from server import robot, slam, view
-from server.util import TrackingMode, ViewMode, ProbabilityMode
-
+from server.util import TrackingMode, ViewMode, MapMode
 
 SPEED=120
 
@@ -19,15 +17,11 @@ class Main(QtWidgets.QMainWindow):
     """Main class containing robot and for updating it's generated map.
     
     Attributes:
-        map (server.view.Occupancy): Map object.
-        robot (robot.Robot): Robot object
+        grid (server.view.Grid): Map object.
+        robot (robot.Bot): Robot object
         slam (slam.Slam): Slam object
-        view_scale (float): Zoom factor for map.
-        controlled (bool): Keyboard or automatic robot movement.
-        image (PIL.Image): Image to display on screen.
-        distribution (PIL.Image): Probability distribution history from SLAM.
     """
-    def __init__(self, width, height, controlled=True):
+    def __init__(self, width, height):
         """Initialise MapViewer object.
 
         Args:
@@ -35,24 +29,28 @@ class Main(QtWidgets.QMainWindow):
         """
         super(Main, self).__init__()
 
-        # Map attributes
+        # Initialise the window and menu items.
+        self.initialise_window()
+        self.initialise_menus()
 
-        self.controlled = controlled  # Remote controlled.
-        self.distribution = False  # Whether to display probability distribution or map.
-        self.running = True
+        # Setup the robot attributes.
+        self.grid = view.Grid(width, height)
+        self.robot = robot.Bot()
+        self.communication = communication.Comm(self.robot)
+        self.slam = slam.Slam(self.communication, self.grid)
+        self.refresh = Update(self.slam)
 
-        # Robot attributes.
-        self.map = view.Occupancy(width, height)  # Initialise map.
-        self.image = self.map.view_images[ViewMode.ADJUSTED]  # Displayed image.
-        self.robot = robot.Robot()  # Initialise robot.
+        # Set up image refresh timer.
+        timer = QtCore.QTimer(self)
+        timer.timeout.connect(self.display)
+        timer.start(33)  # 30 Hz
 
-
-        self.communication = communication.Communication(self.robot, self.map)
+        # Start the robot
         self.communication.start()
+        self.slam.start()
+        self.refresh.start()
 
-        self.slam = slam.Slam(self.robot, self.map, self.communication, self.controlled)  # Initialise SLAM.
-        self.slam.start()  # Start SLAM thread.
-
+    def initialise_window(self):
         # Set up the window
         self.imageLabel = QtWidgets.QLabel()
         self.imageLabel.setBackgroundRole(QtGui.QPalette.Base)
@@ -68,43 +66,97 @@ class Main(QtWidgets.QMainWindow):
         self.setWindowTitle("Robot Map")  # Set title.
         self.showFullScreen()  # Make fullscreen.
 
-        self.dimensions = np.array([self.scrollArea.frameGeometry().width(),
-                                    self.scrollArea.frameGeometry().height()])
-        self.view_centre = np.array([0,0])
-        self.view_scale = 5.0
-        self.mouse_pos = self.view_centre
-        self.tracking_mode = TrackingMode.FREE
+    def initialise_menus(self):
+        menu = QtWidgets.QMenu("SLAM", self)
+        ag = QtWidgets.QActionGroup(self, exclusive=True)
+        a = ag.addAction(QtWidgets.QAction('Scan Matching', self, checkable=True))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Landmarks', self, checkable=True))
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
 
-        # Set up image refresh timer.
-        timer = QtCore.QTimer(self)
-        timer.timeout.connect(self.display)
-        timer.start(33)  # 30 Hz
+        menu = QtWidgets.QMenu("Options", self)
+        a = QtWidgets.QAction("Show Probabilities", menu, checkable=True)
+        a.triggered.connect(self.switch_view_mode)
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
+        a = QtWidgets.QAction("Automatic", menu, checkable=True)
+        a.triggered.connect(self.switch_control)
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
 
-        self.cropthread = threading.Thread(target=self.crop).start()
+        menu = QtWidgets.QMenu("Display Mode", self)
+        ag = QtWidgets.QActionGroup(self, exclusive=True)
+        a = ag.addAction(QtWidgets.QAction('Map Distribution', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_map_mode(MapMode.DIST))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Probability Distribution', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_map_mode(MapMode.PROB))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Map', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_map_mode(MapMode.FINAL))
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
 
-    def update(self):
-        observations = self.communication.sense()
-        self.robot.update(observations)
-        self.map.plot_trail(self.robot.state, (0,0,255,127))
-        self.map.plot_trail(self.robot.adjusted, (255,0,0,127))
+        menu = QtWidgets.QMenu("Tracking Mode", self)
+        ag = QtWidgets.QActionGroup(self, exclusive=True)
+        a = ag.addAction(QtWidgets.QAction('Free', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_tracking_mode(TrackingMode.FREE))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Adjusted Robot', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_tracking_mode(TrackingMode.ADJUSTED))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Raw Robot', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_tracking_mode(TrackingMode.STATE))
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
 
-    def crop(self):
-        while self.running:
-            """Combine sub-images, and crop based on the scale factor."""
-            if self.tracking_mode == TrackingMode.ADJUSTED:
-                self.view_centre = self.robot.adjusted.location
-            elif self.tracking_mode == TrackingMode.STATE:
-                self.view_centre = self.robot.state.location
+        menu = QtWidgets.QMenu("Map Display Mode", self)
+        ag = QtWidgets.QActionGroup(self, exclusive=True)
+        a = ag.addAction(QtWidgets.QAction('Local', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_display_mode(self.grid.view_mode.LOCAL))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Global', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_display_mode(self.grid.view_mode.ADJUSTED))
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
 
-            size = self.dimensions / (self.view_scale * 2)  # Size of cropped window.
-            crop_box = tuple(np.append(self.map.origin + self.view_centre - size,
-                                       self.map.origin + self.view_centre + size))  # Crop box
-            image = self.map.combine(self.robot, self.slam.landmarks)
-            self.image = image.crop(crop_box).resize(self.dimensions)  # Update image.
+        menu = QtWidgets.QMenu("Probability Mode", self)
+        ag = QtWidgets.QActionGroup(self, exclusive=True)
+        a = ag.addAction(QtWidgets.QAction('Prior Probabilities', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_probability_mode(self.grid.probability_mode.PRIOR_PROBABILITIES))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('SLAM Probabilities', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_probability_mode(self.grid.probability_mode.SLAM_PROBABILITIES))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('Combined Probabilities', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_probability_mode(self.grid.probability_mode.COMBINED_PROBABILITIES))
+        menu.addAction(a)
+        self.menuBar().addMenu(menu)
+
+    def switch_view_mode(self, prob):
+        self.grid.probabilities = prob
+
+    def switch_display_mode(self, mode):
+        self.grid.view_mode = mode
+
+    def switch_probability_mode(self, mode):
+        self.grid.probability_mode = mode
+
+    def switch_tracking_mode(self, mode):
+        self.refresh.tracking = mode
+
+    def switch_control(self, mode):
+        self.slam.controlled = not mode
+        if mode:
+            self.slam.resume()
+
+    def switch_map_mode(self, mode):
+        self.refresh.map_mode = mode
 
     def display(self):
         """Convert PIL to ImageQt, and display on screen."""
-        image_qt = ImageQt.ImageQt(self.image)
+        image_qt = ImageQt.ImageQt(self.refresh.get_image())
         self.imageLabel.setPixmap(QtGui.QPixmap.fromImage(image_qt))
         self.imageLabel.adjustSize()
 
@@ -112,24 +164,24 @@ class Main(QtWidgets.QMainWindow):
         """Zoom in/out"""
         degrees = event.angleDelta().y() / 8
         steps = degrees / 15
-        self.view_scale *= 1.5 ** steps
+        self.refresh.scale *= 1.5 ** steps
 
     def mouseMoveEvent(self, event):
         """Allow dragging of the map to move the view window, when free tracking is enabled."""
-        if self.tracking_mode == TrackingMode.FREE and event.buttons() == QtCore.Qt.LeftButton:
+        if self.refresh.tracking == TrackingMode.FREE and event.buttons() == QtCore.Qt.LeftButton:
 
             # Calculate the change in mouse position.
             new_mouse_pos = np.array([event.x(), event.y()])
-            mouse_delta = new_mouse_pos - self.mouse_pos
+            mouse_delta = new_mouse_pos - self.refresh.mouse
 
             # Add this to the view centre.
-            self.view_centre = self.view_centre - mouse_delta * (1 / self.view_scale)
-            self.mouse_pos = new_mouse_pos
+            self.refresh.centre = self.refresh.centre - mouse_delta * (1 / self.refresh.scale)
+            self.refresh.mouse = new_mouse_pos
 
     def mousePressEvent(self, event):
         """Set the mouse start location, so movement delta can be calculated."""
         if event.buttons() == QtCore.Qt.LeftButton:
-            self.mouse_pos = np.array([event.x(), event.y()])
+            self.refresh.mouse = np.array([event.x(), event.y()])
 
     def keyPressEvent(self, event):
         """Detect when a key is pressed, and perform the relevent function.
@@ -144,44 +196,11 @@ class Main(QtWidgets.QMainWindow):
             self.slam.stop()
             self.slam.resume()
             self.communication.stop()
-            self.running = False
+            self.refresh.stop()
             self.close()
-        # Clear the screen.
-        elif key == QtCore.Qt.Key_Q:
-            self.map.clear()
-        elif key == QtCore.Qt.Key_1:
-            self.tracking_mode = TrackingMode.FREE
-        elif key == QtCore.Qt.Key_2:
-            self.tracking_mode = TrackingMode.ADJUSTED
-        elif key == QtCore.Qt.Key_3:
-            self.tracking_mode = TrackingMode.STATE
-
-        elif key == QtCore.Qt.Key_5:
-            self.map.view_mode = ViewMode.ADJUSTED
-        elif key == QtCore.Qt.Key_6:
-            self.map.view_mode = ViewMode.LOCAL
-
-        elif key == QtCore.Qt.Key_4:
-            self.map.probability_mode = ProbabilityMode.LOCAL_MAP
-        elif key == QtCore.Qt.Key_7:
-            self.map.probability_mode = ProbabilityMode.GLOBAL_MAP
-        elif key == QtCore.Qt.Key_8:
-            self.map.probability_mode = ProbabilityMode.SLAM_PROBABILITIES
-        elif key == QtCore.Qt.Key_9:
-            self.map.probability_mode = ProbabilityMode.PRIOR_PROBABILITIES
-        elif key == QtCore.Qt.Key_0:
-            self.map.probability_mode = ProbabilityMode.COMBINED_PROBABILITIES
-
-        # Toggle between probability distribution and map.
-        elif key == QtCore.Qt.Key_P:
-            self.map.probabilities = not self.map.probabilities
-
-        # Toggle between probability distribution and map.
-        elif key == QtCore.Qt.Key_L:
-            self.slam.calibrate()
 
         # Remote control commands.
-        elif self.controlled:
+        elif self.slam.controlled:
             # Move forward.
             if key == QtCore.Qt.Key_W:
                 self.communication.move(SPEED, False)
@@ -208,6 +227,53 @@ class Main(QtWidgets.QMainWindow):
             # Perform SLAM iteration.
             elif key == QtCore.Qt.Key_Return:
                 self.slam.resume()
+
+
+class Update(threading.Thread):
+    def __init__(self, sl):
+        threading.Thread.__init__(self)
+        self.running = True
+        self.slam = sl
+        self.image = None
+        self.scale = 5.0
+        self.slam = sl
+        self.centre = np.zeros(2)
+        self.mouse = np.zeros(2)
+        self.dimensions = np.array([1920, 1080])
+        self.tracking = TrackingMode.FREE
+        self.map_mode = MapMode.DIST
+
+    def run(self):
+        while self.running:
+            """Combine sub-images, and crop based on the scale factor."""
+            if self.tracking == TrackingMode.ADJUSTED:
+                self.centre = self.slam.comm.robot.adjusted.location
+            elif self.tracking == TrackingMode.STATE:
+                self.centre = self.slam.comm.robot.state.location
+
+            l = self.slam.comm.get_measurements()
+            for measurement in l:
+                self.slam.grid.plot_measurement(measurement)
+
+            size = self.dimensions / (self.scale * 2)  # Size of cropped window.
+            crop_box = tuple(np.append(self.slam.grid.origin + self.centre - size,
+                                       self.slam.grid.origin + self.centre + size))  # Crop box
+            image = self.slam.grid.combine(self.slam.comm.robot, self.slam.landmarks)
+            self.slam.grid.plot_trail(self.slam.comm.robot.state, ViewMode.STATE)
+            self.slam.grid.plot_trail(self.slam.comm.robot.adjusted, ViewMode.ADJUSTED)
+
+            if self.map_mode == MapMode.PROB:
+                self.image = self.slam.grid.probability_images[self.slam.grid.probability_mode]
+            elif self.map_mode == MapMode.FINAL:
+                self.image = self.slam.grid.map_images[self.slam.grid.probability_mode]
+            else:
+                self.image = image.crop(crop_box).resize(self.dimensions)  # Update image.
+
+    def stop(self):
+        self.running = False
+
+    def get_image(self):
+        return self.image
 
 
 if __name__ == "__main__":

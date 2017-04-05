@@ -14,7 +14,7 @@ SENSOR_MEAN = 100.0148733
 SENSOR_STDDEV = 3.685631181
 
 
-class Occupancy(object):
+class Grid(object):
     """Class for the occupancy grid, composed of a number of PIL images, for tracking objects and landmarks.
 
     Attributes:
@@ -78,7 +78,7 @@ class Occupancy(object):
             ProbabilityMode.LOCAL_MAP: Image.new("RGBA", (self.width, self.height), "black"),
         }
 
-    def plot_measurement(self, measurement, point_colour=(100, 100, 100), radius=2):
+    def plot_measurement(self, measurement, radius=2):
         """Plot a measurements.
 
         Args:
@@ -86,7 +86,7 @@ class Occupancy(object):
             point_colour (tuple): Colour to plot the end point, in RGB format.
             radius (int): Radius of measurement ends.
         """
-        draw = ImageDraw.Draw(self.view_images[ViewMode.ADJUSTED])
+        draw = ImageDraw.Draw(self.view_images[ViewMode.LOCAL])
 
         # Add origin so it get's displayed from centre.
         start = measurement.state.location + self.origin
@@ -96,7 +96,8 @@ class Occupancy(object):
         measurement_box = ((end[0]-radius, end[1]-radius), (end[0]+radius, end[1]+radius))
 
         # Plot measurement.
-        scan_colour = tuple(192 + 64 * self.scanning for i in range(3))
+        scan_colour = (50, 50, 50)
+        point_colour = (170, 170, 170)
         draw.line(((start[0], start[1]), (end[0], end[1])), fill=scan_colour)
         draw.ellipse(measurement_box, fill=point_colour)
 
@@ -149,7 +150,7 @@ class Occupancy(object):
         draw.line((end_x, end_y, cw_x, cw_y), fill=colour)
         draw.line((end_x, end_y, ccw_x, ccw_y), fill=colour)
 
-    def plot_trail(self, prev, current, state_type):
+    def plot_trail(self, current, state_type):
         """Plot the current location of the robot as a single pixel.
 
         Args:
@@ -159,8 +160,7 @@ class Occupancy(object):
         """
         colour = self.colours[state_type]
         trail = ImageDraw.Draw(self.trail)
-        trail.line((tuple((prev.location+self.origin).astype(int)),
-                    tuple((current.location+self.origin).astype(int))), fill=colour)
+        trail.point(tuple((current.location+self.origin).astype(int)), fill=colour)
 
     def plot_landmark(self, landmark, colour="black"):
         """Plot a landmark as a line segment.
@@ -226,11 +226,12 @@ class Occupancy(object):
         data2 = self.view_images[self.view_mode.LOCAL].load()
         for i in distribution:
             x, y = i
-            x = int(x + self.origin[0])
-            y = int(y + self.origin[1])
-            value2 = max(int(1.25 * distribution[i] * data2[x, y][0]), 50)
+            if -self.width/2 <= x < self.width/2 and -self.height/2 <= y < self.height/2:
+                x = int(x + self.origin[0])
+                y = int(y + self.origin[1])
+                value2 = max(int(1.25 * distribution[i] * data2[x, y][0]),40)
 
-            data2[x, y] = (value2, value2, value2)
+                data2[x, y] = (value2, value2, value2)
 
     def detect_lines(self):
         i = np.array(self.view_images[self.view_mode].convert("L"))
@@ -287,13 +288,14 @@ class Occupancy(object):
 
 
 def sensor_distribution(measurement):
-    distance_std_dev = 2 * SENSOR_STDDEV# * (measurement.distance / SENSOR_MEAN)
+    distance_std_dev = max(2, 0.05*measurement.distance)# * (measurement.distance / SENSOR_MEAN)
+    distance_mean = measurement.distance + measurement.distance*0.05
     angle_std_dev = 10
-    distance_distribution = stats.norm(measurement.distance, distance_std_dev)
+    distance_distribution = stats.norm(distance_mean, distance_std_dev)
     angle_distribution = stats.norm(0, angle_std_dev)
 
-    angle_keys = [i for i in range(-1,2)]#int(-angle_std_dev/2), int(angle_std_dev/2)+1)]
-    distance_keys = [j for j in range(int(measurement.distance - distance_std_dev*2), int(measurement.distance + distance_std_dev)+1)]
+    angle_keys = [i for i in range(int(-angle_std_dev/2), int(angle_std_dev/2)+1)]
+    distance_keys = [j for j in range(int(distance_mean), int(distance_mean+4))]
 
     angle_values = angle_distribution.pdf(angle_keys)
 
@@ -307,7 +309,7 @@ def sensor_distribution(measurement):
             #if j < measurement.distance - distance_std_dev*2:
             #    dist[(x, y)] = 0.001
             #    continue
-            prob = max(angle_values[i] * distance_values[j], 0.001)
+            prob = angle_values[i] * distance_values[j]
 
             #if prob > 0.00001:
             dist[(x, y)] = max(dist.get((x, y), 0), prob)
@@ -329,8 +331,8 @@ def bayesian_estimation(measurement):
         min_prob = min(values)
 
     for key in distribution:
-        if util.dist(np.array(key), measurement.state.location) > measurement.distance:
+        if util.dist(np.array(key), measurement.state.location) > measurement.distance+max(2, 0.05*measurement.distance):
             distribution[key] = 0.8
         else:
-            distribution[key] = (distribution[key]) / max_prob
+            distribution[key] = max((distribution[key]) / max_prob, 0.7)
     return distribution

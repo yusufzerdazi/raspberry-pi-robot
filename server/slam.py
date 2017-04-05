@@ -8,8 +8,7 @@ from scipy import stats
 from server import metrics
 from server.robot import Measurement
 from server import util
-from server import model
-import cProfile
+
 SAMPLES = 150
 
 DISTANCE_MEAN = 100.1188119
@@ -31,7 +30,7 @@ class Slam(threading.Thread):
         paused (bool): SLAM paused.
         paused_cond (threading.Condition): Condition for managing paused state.
     """
-    def __init__(self, robot, occupancy, communication, controlled):
+    def __init__(self, comm, grid):
         """Initialise SLAM object.
 
         Args:
@@ -41,13 +40,15 @@ class Slam(threading.Thread):
         """
         threading.Thread.__init__(self)
 
-        self.robot = robot
-        self.map = occupancy
-        self.communication = communication
+        self.comm = comm
+        self.grid = grid
         self.running = True
-        self.controlled = controlled
+        self.controlled = True
         self.landmarks = []
-        self.prev = copy.deepcopy(self.robot)
+        self.prev = copy.deepcopy(self.comm.robot)
+
+        self.landmark_mode = util.LandmarkMode.HOUGH
+        self.slam_mode = util.SlamMode.SCAN_MATCHING
 
         self.paused = False
         self.pause_cond = threading.Condition(threading.Lock())
@@ -66,25 +67,58 @@ class Slam(threading.Thread):
             if not self.running:
                 break
 
-            self.current = copy.deepcopy(self.robot)
+            self.current = copy.deepcopy(self.comm.robot)
+
+            # Calculate change in angle and distance moved.
+            turned = self.current.adjusted.heading - self.prev.adjusted.heading
+            distance = util.dist(self.current.adjusted.location, self.prev.adjusted.location)
+
+            # Calculate probability distribution for angle turned.
+            angle_std = ((abs(turned)) / ANGLE_MEAN) * ANGLE_STDDEV + 1
+            angle_keys = [i for i in range(int(turned - 2), int(turned + 3))]
+            angle_values = stats.norm.pdf(angle_keys, turned, angle_std)
+            angle_probs = {angle_keys[i]: angle_values[i] for i in range(len(angle_keys))}
+
+            # Calculate probability distribution for position.
+            dstd = (distance / DISTANCE_MEAN) * DISTANCE_STDDEV + 1
+            r = min(2 * dstd, 10)
+            position_keys = [numpy.array([i, j]) for i in range(int(self.current.adjusted.location[0] - 2),
+                                                                int(self.current.adjusted.location[0] + 3))
+                             for j in range(int(self.current.adjusted.location[1] - 2),
+                                            int(self.current.adjusted.location[1] + 3))]
+            distance_distribution = stats.norm(distance, dstd)
+            angle_distribution = stats.norm(0, ANGLE_STDDEV)
+
+            position_probs = {tuple(position_keys[i]): angle_distribution.pdf(abs(numpy.degrees(
+                metrics.angle([self.prev.adjusted.location, position_keys[i]], [self.prev.adjusted.location,
+                                                                                self.current.adjusted.location])))) * distance_distribution.pdf(
+                util.dist(position_keys[i], self.prev.adjusted.location)) for i in range(len(position_keys))}
+
             a = 0
-            local_map = self.map.black_white(self.map.view_images[self.map.view_mode.LOCAL])
-            init_local = self.map.view_images[self.map.view_mode.LOCAL].copy()
-            self.map.probability_images[self.map.probability_mode.GLOBAL_MAP] = self.map.black_white(self.map.view_images[self.map.view_mode.ADJUSTED])
+            p = numpy.array([0,0])
+            local_map = self.grid.black_white(self.grid.view_images[self.grid.view_mode.LOCAL])
+            init_local = self.grid.view_images[self.grid.view_mode.LOCAL].copy()
+            self.grid.probability_images[self.grid.probability_mode.GLOBAL_MAP] = self.grid.black_white(self.grid.view_images[self.grid.view_mode.ADJUSTED])
             max_prob = 0
-            for angle in range(-10,10):
-                rotated = self.map.translate(local_map, angle, self.map.origin+self.current.adjusted.location)
-                val = numpy.sum(numpy.array(rotated.convert("L")) * numpy.array(self.map.probability_images[self.map.probability_mode.GLOBAL_MAP].convert("L")))
-                print(val)
-                if val > max_prob:
-                    max_prob = val
-                    a = angle
-            self.map.probability_images[self.map.probability_mode.LOCAL_MAP] = self.map.translate(local_map, a, self.map.origin+self.robot.adjusted.location)
-            loc = numpy.array(self.map.translate(init_local, a, self.map.origin+self.robot.adjusted.location).convert("L"))
-            glob = numpy.array(self.map.view_images[self.map.view_mode.ADJUSTED].convert("L"))
-            self.map.view_images[self.map.view_mode.ADJUSTED] = Image.fromarray(glob.astype(float)*loc.astype(float)*2/255).convert("RGBA")
-            self.robot.adjustment.delta(numpy.zeros(2), -a)
+            for dp in position_probs:
+                for ap in angle_probs:
+                    t = time.time()
+                    rotated = self.grid.translate(local_map, ap, self.grid.origin+numpy.array(dp))
+                    val = position_probs[dp] * angle_probs[ap] * numpy.sum(numpy.array(rotated.convert("L")) * numpy.array(self.grid.probability_images[self.grid.probability_mode.GLOBAL_MAP].convert("L")))
+                    if val > max_prob:
+                        max_prob = val
+                        a = ap
+                        p = numpy.array(dp)
+            self.grid.probability_images[self.grid.probability_mode.LOCAL_MAP] = self.grid.translate(local_map, a, self.grid.origin+numpy.array(p))
+            loc = numpy.array(self.grid.translate(init_local, a, self.grid.origin+self.comm.robot.adjusted.location).convert("L"))
+            glob = numpy.array(self.grid.view_images[self.grid.view_mode.ADJUSTED].convert("L"))
+            self.grid.view_images[self.grid.view_mode.ADJUSTED] = Image.fromarray(glob.astype(float)*loc.astype(float)*2/255).convert("RGBA")
+            self.comm.robot.adjustment.delta(self.comm.robot.adjusted.location-p, self.comm.robot.adjusted.heading-a)
+            self.grid.clear()
             self.prev = copy.deepcopy(self.current)
+
+            if not self.controlled:
+                self.comm.drive(50)
 
 
     """def run(self):
@@ -104,7 +138,7 @@ class Slam(threading.Thread):
                 break
 
             ""l = model.Landmark([numpy.array([0, 50]), numpy.array([0, -50])])
-            self.map.plot_landmark(l, self.robot.adjusted)
+            self.grid.plot_landmark(l, self.comm.robot.adjusted)
             d1 = {}
             d2 = {}
             d3 = {}
@@ -114,24 +148,24 @@ class Slam(threading.Thread):
                     d1[(i,j)] = 1/((metrics.hausdorff_distance(l.segment, k.segment) * k.distance(l))/10+1)
                     d2[(i,j)] = 1/(metrics.hausdorff_distance(l.segment, k.segment)/10+1)
                     d3[(i,j)] = 1/(metrics.origin_distance(l.segment, k.segment)/10+1)
-                    self.map.plot_landmark(k, self.robot.adjusted)
-            self.map.plot_prob_dist(d1, self.map.probability_mode.SLAM_PROBABILITIES, False)
-            self.map.plot_prob_dist(d2, self.map.probability_mode.PRIOR_PROBABILITIES, False)
-            self.map.plot_prob_dist(d3, self.map.probability_mode.COMBINED_PROBABILITIES, False)
+                    self.grid.plot_landmark(k, self.comm.robot.adjusted)
+            self.grid.plot_prob_dist(d1, self.grid.probability_mode.SLAM_PROBABILITIES, False)
+            self.grid.plot_prob_dist(d2, self.grid.probability_mode.PRIOR_PROBABILITIES, False)
+            self.grid.plot_prob_dist(d3, self.grid.probability_mode.COMBINED_PROBABILITIES, False)
 
             while self.running:
                 time.sleep(.02)""
 
-            self.current = copy.deepcopy(self.robot)
+            self.current = copy.deepcopy(self.comm.robot)
 
             # Collect measurements.
             # measurements = self.discrete_measurements(self.collect_measurements())
 
             # Extract and associate landmarks.
             #landmarks = model.extract_landmarks(measurements)
-            lines = self.map.detect_lines()
+            lines = self.grid.detect_lines()
             thingy = []
-            landmarks = [model.Landmark([numpy.array(line[0]-self.map.origin[0]), numpy.array(line[1]-self.map.origin[1])]) for line in lines]
+            landmarks = [model.Landmark([numpy.array(line[0]-self.grid.origin[0]), numpy.array(line[1]-self.grid.origin[1])]) for line in lines]
             for l in landmarks:
                 add = True
                 for t in thingy:
@@ -146,7 +180,7 @@ class Slam(threading.Thread):
             associated = [l for l in thingy if l.association]
 
             delta = self.update_robot(associated)
-            self.robot.adjustment.delta(delta[0], delta[1])
+            self.comm.robot.adjustment.delta(delta[0], delta[1])
             self.current.adjustment.delta(delta[0], delta[1])
 
             adjusted_landmarks = [landmark.transform(self.current.adjusted.location, delta[1], delta[0]) for landmark in thingy]
@@ -231,9 +265,9 @@ class Slam(threading.Thread):
             slam_loc_distribution[key[0]] = slam_loc_distribution.get(key[0], 0.0) + normalised_slam_distribution[key]
             combined_loc_distribution[key[0]] = combined_loc_distribution.get(key[0], 0.0) + combined_distribution[key]
 
-        self.map.plot_prob_dist(prior_loc_distribution, self.map.probability_mode.PRIOR_PROBABILITIES)
-        self.map.plot_prob_dist(slam_loc_distribution, self.map.probability_mode.SLAM_PROBABILITIES)
-        self.map.plot_prob_dist(combined_loc_distribution, self.map.probability_mode.COMBINED_PROBABILITIES)
+        self.grid.plot_prob_dist(prior_loc_distribution, self.grid.probability_mode.PRIOR_PROBABILITIES)
+        self.grid.plot_prob_dist(slam_loc_distribution, self.grid.probability_mode.SLAM_PROBABILITIES)
+        self.grid.plot_prob_dist(combined_loc_distribution, self.grid.probability_mode.COMBINED_PROBABILITIES)
 
         best = max(combined_distribution, key=combined_distribution.get)
         return numpy.array(best[0]) - self.current.adjusted.location, self.prev.adjusted.heading + best[1] - self.current.adjusted.heading
@@ -247,22 +281,22 @@ class Slam(threading.Thread):
         # If close enough to object, rotate, otherwise move straight.
         rotate = (len([measurement for measurement in measurements if util.angle_diff(0, measurement.angle) < 10 and measurement.distance < 30]) > 0)
         if rotate:
-            self.communication.turn(90)
+            self.comm.turn(90)
         else:
-            self.communication.drive(20)
+            self.comm.drive(20)
 
     def collect_measurements(self, samples=SAMPLES):
-        self.communication.resume()  # Start rotating sensor.
-        self.robot.reset()  # Reset robot's measurements
-        self.map.scanning = True
+        self.comm.resume()  # Start rotating sensor.
+        self.comm.robot.reset()  # Reset robot's measurements
+        self.grid.scanning = True
 
         # Collect measurements.
-        while (len(self.robot.measurements)) < samples:
+        while (len(self.comm.robot.measurements)) < samples:
             time.sleep(.02)
-        measurements = list(self.robot.measurements)
+        measurements = list(self.comm.robot.measurements)
 
-        self.map.scanning = False
-        self.communication.pause()  # Stop rotating sensor.
+        self.grid.scanning = False
+        self.comm.pause()  # Stop rotating sensor.
 
         return sorted(measurements, key=lambda x: x.angle)
 
@@ -275,7 +309,7 @@ class Slam(threading.Thread):
         while centre % 360 == centre:
             distances = [m.distance for m in measurements if util.angle_diff(m.angle, centre) < radius]
             if len(distances) > 0:
-                measurement = Measurement(self.robot.adjusted, centre, numpy.median(distances))
+                measurement = Measurement(self.comm.robot.adjusted, centre, numpy.median(distances))
                 result.append(measurement)
             centre += width
 

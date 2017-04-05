@@ -154,6 +154,22 @@ class ViewMode(enum.Enum):
     LOCAL = 2
 
 
+class MapMode(enum.Enum):
+    DIST = 0
+    PROB = 1
+    FINAL = 2
+
+
+class SlamMode(enum.Enum):
+    LANDMARKS = 0
+    SCAN_MATCHING = 1
+
+
+class LandmarkMode(enum.Enum):
+    RANSAC = 0
+    HOUGH = 1
+
+
 class ProbabilityMode(enum.Enum):
     COMBINED_PROBABILITIES = 0
     SLAM_PROBABILITIES = 1
