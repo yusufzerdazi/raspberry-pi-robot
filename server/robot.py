@@ -94,7 +94,6 @@ class Bot(object):
         self.state = State()
         self.adjustment = State()
         self.adjusted = self.state + self.adjustment
-        self.measurements = []
 
     def update(self, observation):
         """Access the measurements recieved since the last sense, update the robot's state, and return them as a list of
@@ -120,9 +119,4 @@ class Bot(object):
         measurements = []
         measurements.append(Measurement(self.adjusted, (angle/2) % 360, front))
         measurements.append(Measurement(self.adjusted, (angle/2 + 180) % 360, rear))
-        non_extreme = [m for m in measurements if m.distance < 255]
-        self.measurements.extend(non_extreme)
-        return non_extreme
-
-    def reset(self):
-        self.measurements = []
+        return measurements

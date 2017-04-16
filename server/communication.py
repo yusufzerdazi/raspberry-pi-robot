@@ -5,10 +5,10 @@ import numpy
 import copy
 
 from server import util
-from server.view import bayesian_estimation
+from server.robot import Measurement
 
 # Socket variables
-UDP_IP = "192.168.137.29"
+UDP_IP = "192.168.137.238"
 UDP_PORT = 5005
 SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 SOCK.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -34,7 +34,8 @@ class Comm(threading.Thread):
         """Thread loop."""
         while self.running:
             data, address = SOCK.recvfrom(1024)  # Get data from socket.
-            observation = data.decode().split(',')  # Split the data.
+            decoded = data.decode().split(',')  # Split the data.
+            observation = [float(x) for x in decoded]
             self.measurements.extend(self.robot.update(observation))
         SOCK.close()
 
@@ -43,6 +44,16 @@ class Comm(threading.Thread):
         temp = list(self.measurements)
         self.measurements = []
         return temp
+
+    def get_median_measurements(self):
+        temp = list(self.measurements)
+        self.measurements = []
+        result = []
+        for i in range(360):
+            r = [x.distance for x in temp if util.angle_diff(x.angle, i) < 10]
+            val = numpy.median(r)
+            result.append(Measurement(self.robot.adjusted, i, val))
+        return result
 
     def stop(self):
         """Send stop instruction to robot."""
@@ -69,15 +80,15 @@ class Comm(threading.Thread):
     def turn(self, angle):
         """Turn robot a specified angle."""
         start = self.robot.adjusted.heading
-        self.move(numpy.sign(angle)*180, True)
-        while util.angle_diff(start, self.robot.adjusted) < angle:
+        self.move(numpy.sign(angle)*100, True)
+        while util.angle_diff(start, self.robot.adjusted.heading) < angle:
             time.sleep(0.02)
         self.move(0, False)
 
     def drive(self, distance):
         """Move forward a specified distance."""
         start = self.robot.adjusted.location
-        self.move(numpy.sign(distance)*100, False)
+        self.move(numpy.sign(distance)*255, False)
         while util.dist(self.robot.adjusted.location, start) < distance:
             time.sleep(0.02)
         self.move(0, False)

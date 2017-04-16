@@ -3,7 +3,7 @@ import math
 import numpy as np
 from PIL import ImageChops
 from scipy import stats
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from skimage import transform
 from server import metrics
@@ -96,7 +96,7 @@ class Grid(object):
         measurement_box = ((end[0]-radius, end[1]-radius), (end[0]+radius, end[1]+radius))
 
         # Plot measurement.
-        scan_colour = (50, 50, 50)
+        scan_colour = (80, 80, 80)
         point_colour = (170, 170, 170)
         draw.line(((start[0], start[1]), (end[0], end[1])), fill=scan_colour)
         draw.ellipse(measurement_box, fill=point_colour)
@@ -216,42 +216,29 @@ class Grid(object):
             if self.probability_images[dist_type].getpixel(tuple(self.origin + np.array(key)))[0] > value:
                 draw.point(tuple(self.origin + np.array(key)), fill=(value, value, value))
 
-    def plot_measurement_2(self, measurement):
-        draw = ImageDraw.Draw(self.view_images[self.view_mode.LOCAL])
-        draw.pieslice((tuple((measurement.state.location + self.origin - measurement.distance+15).astype(int)),
-                       tuple((measurement.state.location + self.origin + measurement.distance-15).astype(int))),
-                        measurement.state.heading+measurement.angle-5, measurement.state.heading+measurement.angle+5, fill=(50,50,50,255))
-
-        distribution = bayesian_estimation(measurement)
-        data2 = self.view_images[self.view_mode.LOCAL].load()
-        for i in distribution:
-            x, y = i
-            if -self.width/2 <= x < self.width/2 and -self.height/2 <= y < self.height/2:
-                x = int(x + self.origin[0])
-                y = int(y + self.origin[1])
-                value2 = max(int(1.25 * distribution[i] * data2[x, y][0]),40)
-
-                data2[x, y] = (value2, value2, value2)
-
-    def detect_lines(self):
-        i = np.array(self.view_images[self.view_mode].convert("L"))
+    def detect_lines(self, image):
+        i = np.array(image.convert("L"))
         bw = (i > 150) * 255
         self.probability_images[self.probability_mode.GLOBAL_MAP] = Image.fromarray(bw).convert("RGBA")
         lines = transform.probabilistic_hough_line(bw, threshold=30, line_length=50, line_gap=50)
-        return lines
+        translated = []
+        for line in lines:
+            translated.append((line[0]-self.origin[0], line[1]-self.origin[1]))
+        return translated
 
     def black_white(self, image):
         i = np.array(image.convert("L"))
         bw = (i > 150) * 255
-        return Image.fromarray(bw).convert("RGBA")
+        return Image.fromarray(bw).convert("L")
 
-    def translate(self, image, angle, center=None, new_center=None, scale=None, expand=False):
+    def translate(self, image, angle, center=None, new_center=None, scale=None):
+        # http://stackoverflow.com/questions/7501009/affine-transform-in-pil-python
         if center is None:
             return image.rotate(angle)
         angle = -angle / 180.0 * math.pi
         nx, ny = x, y = center
         sx = sy = 1.0
-        if new_center:
+        if new_center is not None:
             (nx, ny) = new_center
         if scale:
             (sx, sy) = scale
@@ -263,7 +250,7 @@ class Grid(object):
         d = -sine / sy
         e = cosine / sy
         f = y - nx * d - ny * e
-        return image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))
+        return image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))#,resample=Image.BICUBIC)
 
     def clear(self):
         """Clear the images."""
@@ -285,54 +272,3 @@ class Grid(object):
             self.plot_state(robot.state, self.view_mode.STATE)
             self.plot_state(robot.adjusted, self.view_mode.ADJUSTED)
             return self.display
-
-
-def sensor_distribution(measurement):
-    distance_std_dev = max(2, 0.05*measurement.distance)# * (measurement.distance / SENSOR_MEAN)
-    distance_mean = measurement.distance + measurement.distance*0.05
-    angle_std_dev = 10
-    distance_distribution = stats.norm(distance_mean, distance_std_dev)
-    angle_distribution = stats.norm(0, angle_std_dev)
-
-    angle_keys = [i for i in range(int(-angle_std_dev/2), int(angle_std_dev/2)+1)]
-    distance_keys = [j for j in range(int(distance_mean), int(distance_mean+4))]
-
-    angle_values = angle_distribution.pdf(angle_keys)
-
-    distance_values = distance_distribution.pdf(distance_keys)
-    dist = {}
-    for i in range(len(angle_keys)):
-        for j in range(len(distance_keys)):
-            x = measurement.state.location[0] + int(distance_keys[j] * math.cos(math.radians(measurement.angle + measurement.state.heading + angle_keys[i])))
-            y = measurement.state.location[1] + int(distance_keys[j] * math.sin(math.radians(measurement.angle + measurement.state.heading + angle_keys[i])))
-
-            #if j < measurement.distance - distance_std_dev*2:
-            #    dist[(x, y)] = 0.001
-            #    continue
-            prob = angle_values[i] * distance_values[j]
-
-            #if prob > 0.00001:
-            dist[(x, y)] = max(dist.get((x, y), 0), prob)
-
-    return dist
-
-
-def bayesian_estimation(measurement):
-    # Variables for normalisation.
-
-    distribution = util.normalise_distribution(sensor_distribution(measurement))
-    max_prob = 1
-    min_prob = 0
-
-    # Determine whether normalisation can be performed.
-    values = list(distribution.values())
-    if len(values) > 0 and sum(values) > 0:
-        max_prob = max(values)
-        min_prob = min(values)
-
-    for key in distribution:
-        if util.dist(np.array(key), measurement.state.location) > measurement.distance+max(2, 0.05*measurement.distance):
-            distribution[key] = 0.8
-        else:
-            distribution[key] = max((distribution[key]) / max_prob, 0.7)
-    return distribution

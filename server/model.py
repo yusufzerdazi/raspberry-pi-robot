@@ -8,11 +8,11 @@ from server import metrics
 
 
 MAX_TRIALS = 1000
-ASSIGNED = 0.75
-SAMPLE_SIZE = 0.1
+ASSIGNED = 0.7
+SAMPLE_SIZE = 5
 ANGLE_RANGE = 30
-RANSAC_TOLERANCE = 10
-RANSAC_CONSENSUS = 0.33
+RANSAC_TOLERANCE = 5
+RANSAC_CONSENSUS = 60
 LANDMARK_RADIUS = 20
 
 
@@ -47,10 +47,10 @@ class Landmark(object):
         return Landmark(rotated, self.association)
 
     def distance(self, other):
-        return metrics.min_distance(self.segment, other.segment)
+        return metrics.origin_distance(self.segment, other.segment)
 
     def probability(self, other):
-        return 1/((self.distance(other)/10+1)**2)
+        return 1/((self.distance(other)+1)/10)
 
 
 def associate_landmarks(new_landmarks, landmarks):
@@ -71,6 +71,19 @@ def associate_landmarks(new_landmarks, landmarks):
             l.association = closest
 
 
+def limit_landmarks(landmarks):
+    new = []
+    if len(landmarks) > 1:
+        for l in landmarks:
+            add = True
+            for j in new:
+                if l.distance(j) < LANDMARK_RADIUS:
+                    add = False
+            if add:
+                new.append(l)
+    return new
+
+
 def extract_landmarks(measurements):
     """Function which extracts landmarks from a set of points.
 
@@ -89,9 +102,9 @@ def extract_landmarks(measurements):
 
         # Randomly select a clustered subsample of the points.
         unassigned = [m for m in measurements if m not in assigned]
-        point = numpy.random.choice(unassigned)#angle = numpy.random.choice(unassigned).angle
-        radius = [p for p in unassigned if util.dist(p.location, point.location) < 20]#util.angle_diff(p.angle, angle) < ANGLE_RANGE]
-        sample = numpy.array([p for p in numpy.random.choice(radius, 3)])
+        angle = numpy.random.choice(unassigned).angle
+        radius = [p for p in unassigned if util.angle_diff(p.angle, angle) < ANGLE_RANGE]
+        sample = numpy.array([p for p in numpy.random.choice(radius, SAMPLE_SIZE)])
 
         # Calculate the x and y standard deviation of the sample.
         std_x = numpy.std(numpy.array([p.location for p in sample])[:, 0])
@@ -101,7 +114,7 @@ def extract_landmarks(measurements):
         consensus = find_consensus(unassigned, sample, is_vertical)
 
         # If there are enough matching points, a landmark has been found.
-        if len(consensus) > RANSAC_CONSENSUS * len(measurements):
+        if len(consensus) > RANSAC_CONSENSUS:
             segment = recalculate_line(consensus, is_vertical)
             if not segment:
                 trials += 1

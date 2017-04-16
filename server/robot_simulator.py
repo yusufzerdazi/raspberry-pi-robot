@@ -4,8 +4,7 @@ import numpy as np
 from server import util
 import random
 import threading
-from server.robot import State
-from server.view import bayesian_estimation
+from server.robot import State, Measurement
 
 
 class Comm(threading.Thread):
@@ -16,6 +15,7 @@ class Comm(threading.Thread):
         self.adjustment = State()
         self.adjusted = self.state + self.adjustment
         self.current = time.time()
+        self.star = self.current
 
         self.rotating = False
         self.spinning = True
@@ -24,7 +24,7 @@ class Comm(threading.Thread):
         self.angle = 0.0
         self.x = 0.0
         self.y = 0.0
-
+        self.actual = np.array([0, 0])
         self.error = [0,0]
         self.measurements = []
         self.running = True
@@ -32,7 +32,7 @@ class Comm(threading.Thread):
         self.robot = robot
         self.map = map
 
-        self.error = 0.1
+        self.error = 0
 
     def run(self):
         while self.running:
@@ -46,7 +46,7 @@ class Comm(threading.Thread):
                 self.heading += self.speed * delta_time * 0.4
             else:
                 distance = self.speed * delta_time * 0.1
-                self.error -= 0.05 * bool(self.speed)
+                self.error += bool(self.speed) * delta_time
                 self.x += distance * math.cos(math.radians(self.heading))
                 self.y += distance * math.sin(math.radians(self.heading))
 
@@ -85,8 +85,9 @@ class Comm(threading.Thread):
 
             front = F if (F < 100) else 255
             rear = R if (R < 100) else 255
-            self.measurements.extend([m for m in self.robot.update((self.x, self.y, self.heading, (angle * 2), front, rear)) if
-                            m.distance < 255])
+
+            self.actual = np.array([self.x,self.y])
+            self.measurements.extend(self.robot.update((self.x+self.error, self.y, self.heading, (angle * 2), front, rear)))
 
             self.current = new
 
@@ -99,6 +100,19 @@ class Comm(threading.Thread):
         """
         result = list(self.measurements)
         self.measurements = []
+        return result
+
+    def get_median_measurements(self):
+        temp = list(self.measurements)
+        self.measurements = []
+        result = []
+        for i in range(360):
+            r = [x.distance for x in temp if util.angle_diff(x.angle, i) < 10]
+            if len(r)> 0:
+                if len(r) % 2 == 0:
+                    r.pop(-1)
+                val = np.median(r)
+                result.append(Measurement(self.robot.adjusted, i, val))
         return result
 
     def senses(self, n):
@@ -129,7 +143,7 @@ class Comm(threading.Thread):
     def turn(self, angle):
         start = self.robot.adjusted.heading
         self.move(np.sign(angle)*180, True)
-        while util.angle_diff(start, self.robot.adjusted.heading) < angle:
+        while util.angle_diff(start, self.robot.adjusted.heading) < abs(angle):
             time.sleep(0.02)
         self.move(0, False)
 

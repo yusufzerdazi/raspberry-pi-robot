@@ -4,13 +4,15 @@ import threading
 import numpy as np
 from PIL import ImageQt
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PIL import Image
 
 import server.robot_simulator as communication
 #from server import communication
 from server import robot, slam, view
-from server.util import TrackingMode, ViewMode, MapMode
+from server import util
+from server.util import TrackingMode, ViewMode, MapMode, SlamMode, LandmarkMode
 
-SPEED=120
+SPEED=100
 
 
 class Main(QtWidgets.QMainWindow):
@@ -70,8 +72,13 @@ class Main(QtWidgets.QMainWindow):
         menu = QtWidgets.QMenu("SLAM", self)
         ag = QtWidgets.QActionGroup(self, exclusive=True)
         a = ag.addAction(QtWidgets.QAction('Scan Matching', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_slam_type(SlamMode.SCAN_MATCHING))
         menu.addAction(a)
-        a = ag.addAction(QtWidgets.QAction('Landmarks', self, checkable=True))
+        a = ag.addAction(QtWidgets.QAction('Hough Landmarks', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_slam_type(LandmarkMode.HOUGH))
+        menu.addAction(a)
+        a = ag.addAction(QtWidgets.QAction('RANSAC Landmarks', self, checkable=True))
+        a.triggered.connect(lambda x: self.switch_slam_type(LandmarkMode.RANSAC))
         menu.addAction(a)
         self.menuBar().addMenu(menu)
 
@@ -92,9 +99,6 @@ class Main(QtWidgets.QMainWindow):
         menu.addAction(a)
         a = ag.addAction(QtWidgets.QAction('Probability Distribution', self, checkable=True))
         a.triggered.connect(lambda x: self.switch_map_mode(MapMode.PROB))
-        menu.addAction(a)
-        a = ag.addAction(QtWidgets.QAction('Map', self, checkable=True))
-        a.triggered.connect(lambda x: self.switch_map_mode(MapMode.FINAL))
         menu.addAction(a)
         self.menuBar().addMenu(menu)
 
@@ -134,6 +138,21 @@ class Main(QtWidgets.QMainWindow):
         menu.addAction(a)
         self.menuBar().addMenu(menu)
 
+        self.statusBar = QtWidgets.QStatusBar()
+        self.setStatusBar(self.statusBar)
+
+        self.sl = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.sl.setMinimum(0)
+        self.sl.setMaximum(100)
+        self.sl.setValue(0)
+        self.sl.setTickPosition(QtWidgets.QSlider.TicksBelow)
+        self.sl.setTickInterval(5)
+
+        self.statusBar.addWidget(self.sl)
+        self.sl.valueChanged.connect(self.probability_amount)
+        #self.setLayout(layout)
+        self.setWindowTitle("SpinBox demo")
+
     def switch_view_mode(self, prob):
         self.grid.probabilities = prob
 
@@ -145,6 +164,19 @@ class Main(QtWidgets.QMainWindow):
 
     def switch_tracking_mode(self, mode):
         self.refresh.tracking = mode
+
+    def probability_amount(self, value):
+        self.refresh.alpha = value/100
+
+    def switch_slam_type(self, mode):
+        if mode == LandmarkMode.RANSAC:
+            self.slam.slam_mode = SlamMode.LANDMARKS
+            self.slam.landmark_mode = LandmarkMode.RANSAC
+        elif mode == LandmarkMode.HOUGH:
+            self.slam.slam_mode = SlamMode.LANDMARKS
+            self.slam.landmark_mode = LandmarkMode.HOUGH
+        else:
+            self.slam.slam_mode = SlamMode.SCAN_MATCHING
 
     def switch_control(self, mode):
         self.slam.controlled = not mode
@@ -200,7 +232,7 @@ class Main(QtWidgets.QMainWindow):
             self.close()
 
         # Remote control commands.
-        elif self.slam.controlled:
+        elif self.slam.allow_control:
             # Move forward.
             if key == QtCore.Qt.Key_W:
                 self.communication.move(SPEED, False)
@@ -226,12 +258,19 @@ class Main(QtWidgets.QMainWindow):
 
             # Perform SLAM iteration.
             elif key == QtCore.Qt.Key_Return:
+                #m = [x for x in self.communication.get_measurements() if util.angle_diff(x.angle, 0) < 20 and x.distance < 255][-1]
+                #start = self.robot.adjusted.location
+                #self.communication.drive(50)
+                #n = [x for x in self.communication.get_measurements() if util.angle_diff(x.angle, 0) < 20 and x.distance < 255][-1]
+                #end = self.robot.adjusted.location
+                #print(str(util.dist(start,end)), str(m.distance-n.distance))
                 self.slam.resume()
 
 
 class Update(threading.Thread):
     def __init__(self, sl):
         threading.Thread.__init__(self)
+        self.alpha = 0
         self.running = True
         self.slam = sl
         self.image = None
@@ -251,23 +290,21 @@ class Update(threading.Thread):
             elif self.tracking == TrackingMode.STATE:
                 self.centre = self.slam.comm.robot.state.location
 
-            l = self.slam.comm.get_measurements()
-            for measurement in l:
-                self.slam.grid.plot_measurement(measurement)
-
             size = self.dimensions / (self.scale * 2)  # Size of cropped window.
             crop_box = tuple(np.append(self.slam.grid.origin + self.centre - size,
                                        self.slam.grid.origin + self.centre + size))  # Crop box
-            image = self.slam.grid.combine(self.slam.comm.robot, self.slam.landmarks)
+
             self.slam.grid.plot_trail(self.slam.comm.robot.state, ViewMode.STATE)
             self.slam.grid.plot_trail(self.slam.comm.robot.adjusted, ViewMode.ADJUSTED)
 
-            if self.map_mode == MapMode.PROB:
-                self.image = self.slam.grid.probability_images[self.slam.grid.probability_mode]
-            elif self.map_mode == MapMode.FINAL:
-                self.image = self.slam.grid.map_images[self.slam.grid.probability_mode]
+            if self.map_mode == MapMode.DIST:
+                image = self.slam.grid.combine(self.slam.comm.robot, self.slam.landmarks)
+            elif self.map_mode == MapMode.PROB:
+                image = Image.blend(self.slam.grid.combine(self.slam.comm.robot, self.slam.landmarks),
+                                    self.slam.grid.probability_images[self.slam.grid.probability_mode], self.alpha)
             else:
-                self.image = image.crop(crop_box).resize(self.dimensions)  # Update image.
+                image = self.slam.grid.map_images[self.slam.grid.probability_mode]
+            self.image = image.crop(crop_box).resize(self.dimensions)  # Update image.
 
     def stop(self):
         self.running = False
