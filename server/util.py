@@ -1,4 +1,5 @@
 """Module that contains general functions for 2D algebraic manipulations."""
+
 import enum
 import math
 import numpy
@@ -34,6 +35,7 @@ def pol_to_cart(r, theta):
     return numpy.array([x, y])
 
 
+# noinspection PyUnresolvedReferences
 def dist(first, second):
     """Distance between two points.
 
@@ -107,6 +109,7 @@ def rotate_points(centre, points, theta):
     return [rotate_point(centre, point, theta) for point in points]
 
 
+# noinspection PyUnresolvedReferences,PyUnresolvedReferences,PyUnresolvedReferences,PyUnresolvedReferences
 def nearest(point, slope, intercept):
     """Given a point and a line, find the point on the line closest to the point.
 
@@ -140,6 +143,13 @@ def normalise_distribution(d):
         return {key: d[key] / total for key in d}
     else:
         return {key: 1 / len(d) for key in d}
+
+
+def middle(arr):
+    if len(arr) == 0:
+        return None
+    else:
+        return sorted(arr)[int(len(arr)/2)]
 
 
 class TrackingMode(enum.Enum):

@@ -1,9 +1,10 @@
-import random
+"""Module defining functions for extracting and matching landmarks."""
 
 import numpy
 from scipy.stats import stats
+from skimage.transform import probabilistic_hough_line
 
-from server import util
+from server import util, occupancy
 from server import metrics
 
 
@@ -88,7 +89,8 @@ def extract_landmarks(measurements):
     """Function which extracts landmarks from a set of points.
 
     Args:
-        measurements (:obj:`list` of :obj:`Measurement`): A set of Measurement objects that detail the robots observations.
+        measurements (:obj:`list` of :obj:`Measurement`): A set of Measurement objects that detail the robots
+            observations.
 
     Returns:
         list: A list of discovered landmarks.
@@ -98,6 +100,7 @@ def extract_landmarks(measurements):
     trials = 0  # Number of trials attempted.
 
     # Look for landmarks while haven't reached max trials, and still enough unassigned points left.
+    # noinspection PyTypeChecker
     while trials < MAX_TRIALS and len(assigned) < ASSIGNED * len(measurements):
 
         # Randomly select a clustered subsample of the points.
@@ -180,5 +183,16 @@ def recalculate_line(consensus, is_vertical):
     return start, end
 
 
-def remove_outliers(measurements):
-    pass#for m in measurement:
+def extract_hough_landmarks(image):
+    """Extract landmarks from an image using the Hough transform.
+    
+    Args:
+        image (PIL.Image.Image): Image to extract landmarks from.
+    """
+    origin = numpy.array(image.size, dtype=numpy.int)/2  # Centre of image.
+    black_white = occupancy.black_white(image)
+    lines = probabilistic_hough_line(black_white, threshold=30, line_length=50, line_gap=50)  # Extract lines
+    landmarks = []
+    for line in lines:
+        landmarks.append(Landmark([line[0] - origin[0], line[1] - origin[1]]))
+    return limit_landmarks(landmarks)

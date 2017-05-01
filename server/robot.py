@@ -1,4 +1,5 @@
-import math
+"""Module for storing and updating the robot state."""
+
 import time
 import numpy as np
 
@@ -87,7 +88,6 @@ class Bot(object):
         state (State): Raw measured state.
         adjustment (State): SLAM adjustment.
         adjusted (State): State combined with adjustment.
-        measurements (list): Array of observed measurements.
     """
     def __init__(self):
         """Initialise robot object."""
@@ -95,6 +95,7 @@ class Bot(object):
         self.adjustment = State()
         self.adjusted = self.state + self.adjustment
 
+    # noinspection PyListCreation
     def update(self, observation):
         """Access the measurements recieved since the last sense, update the robot's state, and return them as a list of
         Measurement objects.

@@ -1,4 +1,5 @@
-import cProfile
+"""Module containing the main SLAM calculations."""
+
 import threading
 import time
 import copy
@@ -6,10 +7,10 @@ import copy
 import numpy
 from PIL import Image
 from scipy import stats
-from server import metrics
-from server.robot import Measurement
-from server import util
-from server import model
+from server import util, robot, simulation
+from server import world
+from server import occupancy
+from server.occupancy import translate
 
 SAMPLES = 400
 
@@ -30,65 +31,72 @@ class Slam(threading.Thread):
         paused (bool): SLAM paused.
         pause_cond (threading.Condition): Condition for managing paused state.
     """
-    def __init__(self, comm, grid):
+    def __init__(self, comm, grid, landmark_type=util.LandmarkMode.HOUGH, drift_error=0):
         """Initialise SLAM object.
 
         Args:
-            robot (robot.Robot): Robot object.
-            occupancy (robot.Map): Occupancy grid.
-            controlled (bool): Whether to run SLAM automatically or wait for user input.
+            comm (robot.Robot): Communication object.
+            grid (robot.Grid): Occupancy grid.
         """
         threading.Thread.__init__(self)
 
         self.comm = comm
         self.grid = grid
         self.running = True
-        self.controlled = False
+        self.controlled = True
         self.allow_control = self.controlled
         self.landmarks = []
         self.prev = copy.deepcopy(self.comm.robot)
         self.current = copy.deepcopy(self.comm.robot)
 
-        self.landmark_mode = util.LandmarkMode.HOUGH
+        self.landmark_mode = landmark_type
         self.slam_mode = util.SlamMode.LANDMARKS
+
+        self.comm.drift_error = drift_error
 
         self.paused = False
         self.pause_cond = threading.Condition(threading.Lock())
 
     def run(self):
-        i = 1
-        while i <= 300:
-            #l1 = model.Landmark([numpy.array([50,-50]), numpy.array([50,50])])
-            #l12 = model.Landmark([numpy.array([-50, 50]), numpy.array([50, 50])])
-            #self.landmarks.extend([l1,l12])
-            #l2 = model.Landmark([numpy.array([55,-50]), numpy.array([50,50])])
-            #l22 = model.Landmark([numpy.array([-50, 45]), numpy.array([50, 50])])
-            #l2.association = l1
-            #l22.association = l12
-            #dist = self.get_landmark_distribution([l2, l22],[0], [(i,j) for i in range(-10,10) for j in range(-10,10)])
-            #plot_dist = {}
-            #for key in dist:
-            #    plot_dist[key[0]] = plot_dist.get(key[0], 0) + dist[key]
-            #self.grid.plot_prob_dist(plot_dist,self.grid.probability_mode.SLAM_PROBABILITIES)
-            #self.landmarks.extend([l2, l22])
-            #while True:
-            #    time.sleep(.02)
+        #i = 1
+        while self.running:# and i <= 100:
+            """l1 = world.Landmark([numpy.array([50,-50]), numpy.array([50,50])])
+            l12 = world.Landmark([numpy.array([-50, 50]), numpy.array([50, 50])])
+            self.landmarks.extend([l1,l12])
+            l2 = world.Landmark([numpy.array([55,-50]), numpy.array([50,50])])
+            l22 = world.Landmark([numpy.array([-50, 45]), numpy.array([50, 50])])
+            l2.association = l1
+            l22.association = l12
+            dist2, angle_keys, position_keys  = self.get_prior_distribution()
+            dist = self.get_landmark_distribution([l2, l22], angle_keys, position_keys)
+            normalised_slam_distribution = util.normalise_distribution(dist)
+            normalised_prior_distribution = util.normalise_distribution(dist2)
+            combined_distribution = {key: normalised_prior_distribution[key] * normalised_slam_distribution[key]
+                                     for key in normalised_prior_distribution}
+            self.plot_distributions(normalised_prior_distribution, normalised_slam_distribution, combined_distribution)
+            self.landmarks.extend([l2, l22])
+            while True:
+                time.sleep(.02)"""
             self.wait_for_command()
             measurements = self.take_measurements()
             self.update_model(measurements)
+
+
+            #print(str(i) + " "+ str(time.time()) + " " + str(util.dist(self.comm.alternative.location, self.comm.robot.adjusted.location))
+            #      + " " + str(util.dist(self.comm.alternative.location, self.comm.actual.location)))
+
             self.move_robot(measurements)
 
-            print(str(i) + "," + str(time.time()) + "," + str(util.dist(self.comm.actual, self.comm.robot.adjusted.location)) + "," + str(util.dist(self.comm.actual, self.comm.robot.state.location)))
-            i += 1
+        #    i += 1
 
     def get_scan_matching_distribution(self, angles, translations, centre):
         dist = {}
-        global_map = self.grid.black_white(self.grid.view_images[self.grid.view_mode.ADJUSTED])
-        local_map = self.grid.black_white(self.grid.view_images[self.grid.view_mode.LOCAL])
+        global_map = occupancy.black_white(self.grid.view_images[self.grid.view_mode.ADJUSTED])
+        local_map = occupancy.black_white(self.grid.view_images[self.grid.view_mode.LOCAL])
         for translation in translations:
-            translated_map = self.grid.translate(local_map, 0, centre, centre+translation)
+            translated_map = translate(local_map, 0, centre, centre + translation)
             for angle in angles:
-                rotated_map = self.grid.translate(translated_map, angle, centre+translation)
+                rotated_map = translate(translated_map, angle, centre + translation)
                 rotated_map.paste(global_map, mask=rotated_map)
                 value = numpy.array(rotated_map).mean()
                 dist[(tuple(translation),  angle)] = value
@@ -137,12 +145,6 @@ class Slam(threading.Thread):
                 
         return prior_distribution, angle_keys, position_keys
 
-    def get_hough_landmarks(self):
-        local_map = self.grid.black_white(self.grid.view_images[self.grid.view_mode.LOCAL])
-        segments = self.grid.detect_lines(local_map)
-        landmarks = [model.Landmark(segment) for segment in segments]
-        return landmarks
-
     def get_ransac_landmarks(self):
         pass
 
@@ -152,14 +154,15 @@ class Slam(threading.Thread):
 
         if self.slam_mode == util.SlamMode.LANDMARKS:
             if self.landmark_mode == util.LandmarkMode.HOUGH:
-                landmarks = model.limit_landmarks(self.get_hough_landmarks())
+                landmarks = world.extract_hough_landmarks(self.grid.view_images[self.grid.view_mode.LOCAL])
             else:
-                landmarks = model.extract_landmarks(measurements)
-            model.associate_landmarks(landmarks, self.landmarks)
+                landmarks = world.extract_landmarks(measurements)
+            world.associate_landmarks(landmarks, self.landmarks)
             associated_landmarks = [l for l in landmarks if l.association]
             slam_distribution = self.get_landmark_distribution(associated_landmarks, angles, translations)
         else:
-            slam_distribution = self.get_scan_matching_distribution(angles, translations, self.current.adjusted.location)
+            slam_distribution = self.get_scan_matching_distribution(angles, translations,
+                                                                    self.current.adjusted.location)
             smallest = min(list(slam_distribution.values()))
             slam_distribution = {key: slam_distribution[key] - smallest for key in slam_distribution}
 
@@ -172,13 +175,14 @@ class Slam(threading.Thread):
 
         delta = max(combined_distribution, key=combined_distribution.get)
         self.comm.robot.adjustment.delta(delta[0], delta[1])
-        adjusted_map = self.grid.translate(self.grid.view_images[self.grid.view_mode.LOCAL], -delta[1],
-                                           self.current.adjusted.location + self.grid.origin,
-                                           self.current.adjusted.location + self.grid.origin + numpy.array(delta[0]))
+        adjusted_map = translate(self.grid.view_images[self.grid.view_mode.LOCAL], -delta[1],
+                                 self.current.adjusted.location + self.grid.origin,
+                                 self.current.adjusted.location + self.grid.origin + numpy.array(delta[0]))
 
         global_map = numpy.array(self.grid.view_images[self.grid.view_mode.ADJUSTED].convert("L")).astype(float)
         local_map = numpy.array(adjusted_map.convert("L")).astype(float)
-        self.grid.view_images[self.grid.view_mode.ADJUSTED] = Image.fromarray(global_map*local_map*2/255).convert("RGBA")
+        self.grid.view_images[self.grid.view_mode.ADJUSTED] = Image.fromarray(global_map * local_map * 2 / 255).convert(
+            "RGBA")
 
         adjusted_landmarks = [landmark.transform(self.current.adjusted.location, delta[1], delta[0]) for landmark in
                               landmarks if not landmark.association]
@@ -192,8 +196,10 @@ class Slam(threading.Thread):
         for key in normalised_slam_distribution:
             new_key = tuple(numpy.array(key[0]) + loc)
             plot_slam_distribution[new_key] = plot_slam_distribution.get(new_key, 0) + normalised_slam_distribution[key]
-            plot_combined_distribution[new_key] = plot_combined_distribution.get(new_key, 0) + combined_distribution[key]
-            plot_prior_distribution[new_key] = plot_prior_distribution.get(new_key, 0) + normalised_prior_distribution[key]
+            plot_combined_distribution[new_key] = plot_combined_distribution.get(new_key, 0) + combined_distribution[
+                key]
+            plot_prior_distribution[new_key] = plot_prior_distribution.get(new_key, 0) + normalised_prior_distribution[
+                key]
 
         self.grid.plot_prob_dist(plot_slam_distribution, self.grid.probability_mode.SLAM_PROBABILITIES)
         self.grid.plot_prob_dist(plot_prior_distribution, self.grid.probability_mode.PRIOR_PROBABILITIES)
@@ -246,3 +252,4 @@ class Slam(threading.Thread):
 
     def stop(self):
         self.running = False
+        self.resume()

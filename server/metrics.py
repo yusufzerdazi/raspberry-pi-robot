@@ -1,3 +1,5 @@
+"""Module which defines the functions used to measure the distance between two landmarks."""
+
 import math
 import numpy
 
@@ -6,6 +8,15 @@ from server.util import length
 
 
 def frechet_distance(first, second):
+    """Since the Frechet distance is dependant on the order that the line segments are provided, find the minimum.
+    
+    Args:
+        first (list): First segment
+        second (list): Second segment
+
+    Returns:
+        float: Frechet distance.
+    """
     return min(ordered_frechet_distance(first, second), ordered_frechet_distance(second, first))
 
 
@@ -125,6 +136,7 @@ def mod_hausdorff_distance(first, second):
     return min(length(first), length(second)) * math.sin(angle(first, second))
 
 
+# noinspection PyTypeChecker
 def midpoint_distance(first, second):
     """Computes the Midpoint distance between two line segments.
 
@@ -143,6 +155,15 @@ def midpoint_distance(first, second):
 
 
 def origin_distance(first, second):
+    """Computes the distance between the closest point on each lines to the origin.
+
+    Args:
+        first (list): First segment
+        second (list): Second segment
+
+    Returns:
+        float: Distance.
+    """
     first_origin = perpendicular_point(numpy.zeros(2), first)
     second_origin = perpendicular_point(numpy.zeros(2), second)
     return dist(first_origin, second_origin)
@@ -262,9 +283,8 @@ def angle(first, second):
     v_first = numpy.array([(first[0][0] - first[1][0]), (first[0][1] - first[1][1])])
     v_second = numpy.array([(second[0][0] - second[1][0]), (second[0][1] - second[1][1])])
 
-    theta = numpy.arctan2((v_first[0] * v_second[1]) - (v_first[1] * v_second[0]), (v_first[0] * v_second[0]) + (v_first[1] * v_second[1]))
+    theta = numpy.arctan2((v_first[0]*v_second[1])-(v_first[1]*v_second[0]),
+                          (v_first[0]*v_second[0])+(v_first[1]*v_second[1]))
     if abs(theta) > math.pi / 2:
         theta -= numpy.sign(theta)*math.pi
     return theta
-
-#print(straight_line_distance([numpy.array([0,0]),numpy.array([0,1])], [numpy.array([10,0]),numpy.array([0,1])]))

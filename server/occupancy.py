@@ -1,13 +1,10 @@
+"""Module for storing the occupancy grid of the map, as well as preliminary calculations."""
+
 import math
 
 import numpy as np
-from PIL import ImageChops
-from scipy import stats
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
-from skimage import transform
-from server import metrics
-from server import util
 from server.util import ViewMode, ProbabilityMode
 
 SENSOR_MEAN = 100.0148733
@@ -83,7 +80,6 @@ class Grid(object):
 
         Args:
             measurement (Measurement): Measurement to plot.
-            point_colour (tuple): Colour to plot the end point, in RGB format.
             radius (int): Radius of measurement ends.
         """
         draw = ImageDraw.Draw(self.view_images[ViewMode.LOCAL])
@@ -100,15 +96,6 @@ class Grid(object):
         point_colour = (170, 170, 170)
         draw.line(((start[0], start[1]), (end[0], end[1])), fill=scan_colour)
         draw.ellipse(measurement_box, fill=point_colour)
-
-    def plot_measurements(self, measurements):
-        """Plot a list of measurements.
-
-        Args:
-            measurements: List of measurements.
-        """
-        for measurement in measurements:
-            self.plot_measurement_2(measurement)
 
     def plot_state(self, state, state_type, radius=3):
         """Plot the location and direction of the robot.
@@ -154,7 +141,6 @@ class Grid(object):
         """Plot the current location of the robot as a single pixel.
 
         Args:
-            prev (State): Previous robot state.
             current (State): Current robot state.
             state_type (ViewMode): View mode of state.
         """
@@ -167,7 +153,6 @@ class Grid(object):
 
         Args:
             landmark (Landmark): Landmark to plot.
-            state (Robot): State of the robot.
             colour (tuple): Colour to plot the landmark
         """
         if landmark.association:
@@ -216,42 +201,6 @@ class Grid(object):
             if self.probability_images[dist_type].getpixel(tuple(self.origin + np.array(key)))[0] > value:
                 draw.point(tuple(self.origin + np.array(key)), fill=(value, value, value))
 
-    def detect_lines(self, image):
-        i = np.array(image.convert("L"))
-        bw = (i > 150) * 255
-        self.probability_images[self.probability_mode.GLOBAL_MAP] = Image.fromarray(bw).convert("RGBA")
-        lines = transform.probabilistic_hough_line(bw, threshold=30, line_length=50, line_gap=50)
-        translated = []
-        for line in lines:
-            translated.append((line[0]-self.origin[0], line[1]-self.origin[1]))
-        return translated
-
-    def black_white(self, image):
-        i = np.array(image.convert("L"))
-        bw = (i > 150) * 255
-        return Image.fromarray(bw).convert("L")
-
-    def translate(self, image, angle, center=None, new_center=None, scale=None):
-        # http://stackoverflow.com/questions/7501009/affine-transform-in-pil-python
-        if center is None:
-            return image.rotate(angle)
-        angle = -angle / 180.0 * math.pi
-        nx, ny = x, y = center
-        sx = sy = 1.0
-        if new_center is not None:
-            (nx, ny) = new_center
-        if scale:
-            (sx, sy) = scale
-        cosine = math.cos(angle)
-        sine = math.sin(angle)
-        a = cosine / sx
-        b = sine / sx
-        c = x - nx * a - ny * b
-        d = -sine / sy
-        e = cosine / sy
-        f = y - nx * d - ny * e
-        return image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))#,resample=Image.BICUBIC)
-
     def clear(self):
         """Clear the images."""
         self.view_images[ViewMode.LOCAL] = Image.new("RGBA", (self.width, self.height), "gray")
@@ -272,3 +221,30 @@ class Grid(object):
             self.plot_state(robot.state, self.view_mode.STATE)
             self.plot_state(robot.adjusted, self.view_mode.ADJUSTED)
             return self.display
+
+
+def translate(image, angle, center=None, new_center=None, scale=None):
+    # http://stackoverflow.com/questions/7501009/affine-transform-in-pil-python
+    if center is None:
+        return image.rotate(angle)
+    angle = -angle / 180.0 * math.pi
+    nx, ny = x, y = center
+    sx = sy = 1.0
+    if new_center is not None:
+        (nx, ny) = new_center
+    if scale:
+        (sx, sy) = scale
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    a = cosine / sx
+    b = sine / sx
+    c = x - nx * a - ny * b
+    d = -sine / sy
+    e = cosine / sy
+    f = y - nx * d - ny * e
+    return image.transform(image.size, Image.AFFINE, (a, b, c, d, e, f))
+
+
+def black_white(image):
+    i = np.array(image.convert("L"))
+    return (i > 150) * 255
