@@ -7,10 +7,8 @@ import copy
 import numpy
 from PIL import Image
 from scipy import stats
-from server import util, robot, simulation
-from server import world
-from server import occupancy
-from server.occupancy import translate
+
+from server import util, robot, world, occupancy
 
 SAMPLES = 400
 
@@ -26,8 +24,16 @@ class Slam(threading.Thread):
     
     Attributes:
         running (bool): Thread running.
+        controlled (bool): Whether the robot is controlled manually.
+        comm (communication.Comm): Object for communicating with the Raspberry Pi.
+        grid (occupancy.Grid): Object for storing the map.
+        allow_control (bool): Whether input commands will be sent to the robot.
         landmarks (array): List of unique landmarks.
         prev (robot.State): Copy of previous robot state.
+        current (robot.State): The current state of the robot.
+        landmark_mode (util.LandmarkMode): Which landmark extraction method to use.
+        slam_mode (util.SlamMode): Which SLAM method to use.
+        drift_error (float): Speed to drift in the +x direction.
         paused (bool): SLAM paused.
         pause_cond (threading.Condition): Condition for managing paused state.
     """
@@ -37,13 +43,15 @@ class Slam(threading.Thread):
         Args:
             comm (robot.Robot): Communication object.
             grid (robot.Grid): Occupancy grid.
+            landmark_type (util.LandmarkMode): Method of landmark extraction.
+            drift_error (float): Speed to drift in the +x direction.
         """
         threading.Thread.__init__(self)
 
-        self.comm = comm
-        self.grid = grid
         self.running = True
         self.controlled = True
+        self.comm = comm
+        self.grid = grid
         self.allow_control = self.controlled
         self.landmarks = []
         self.prev = copy.deepcopy(self.comm.robot)
@@ -58,51 +66,45 @@ class Slam(threading.Thread):
         self.pause_cond = threading.Condition(threading.Lock())
 
     def run(self):
-        #i = 1
-        while self.running:# and i <= 100:
-            """l1 = world.Landmark([numpy.array([50,-50]), numpy.array([50,50])])
-            l12 = world.Landmark([numpy.array([-50, 50]), numpy.array([50, 50])])
-            self.landmarks.extend([l1,l12])
-            l2 = world.Landmark([numpy.array([55,-50]), numpy.array([50,50])])
-            l22 = world.Landmark([numpy.array([-50, 45]), numpy.array([50, 50])])
-            l2.association = l1
-            l22.association = l12
-            dist2, angle_keys, position_keys  = self.get_prior_distribution()
-            dist = self.get_landmark_distribution([l2, l22], angle_keys, position_keys)
-            normalised_slam_distribution = util.normalise_distribution(dist)
-            normalised_prior_distribution = util.normalise_distribution(dist2)
-            combined_distribution = {key: normalised_prior_distribution[key] * normalised_slam_distribution[key]
-                                     for key in normalised_prior_distribution}
-            self.plot_distributions(normalised_prior_distribution, normalised_slam_distribution, combined_distribution)
-            self.landmarks.extend([l2, l22])
-            while True:
-                time.sleep(.02)"""
+        """Main loop."""
+        while self.running:
             self.wait_for_command()
             measurements = self.take_measurements()
             self.update_model(measurements)
-
-
-            #print(str(i) + " "+ str(time.time()) + " " + str(util.dist(self.comm.alternative.location, self.comm.robot.adjusted.location))
-            #      + " " + str(util.dist(self.comm.alternative.location, self.comm.actual.location)))
-
             self.move_robot(measurements)
 
-        #    i += 1
-
     def get_scan_matching_distribution(self, angles, translations, centre):
+        """Get the probability distribution by performing scan matching between the current scan and the known map.
+        
+        Args:
+            angles (list): The angles to search through.
+            translations (list): The translations to search through.
+            centre (np.ndarray): Coordinates to centre the distribution at.
+        """
         dist = {}
+
+        # Convert the maps to black and white
         global_map = occupancy.black_white(self.grid.view_images[self.grid.view_mode.ADJUSTED])
         local_map = occupancy.black_white(self.grid.view_images[self.grid.view_mode.LOCAL])
         for translation in translations:
-            translated_map = translate(local_map, 0, centre, centre + translation)
+            translated_map = occupancy.translate(local_map, 0, centre, centre + translation)
             for angle in angles:
-                rotated_map = translate(translated_map, angle, centre + translation)
+                rotated_map = occupancy.translate(translated_map, angle, centre + translation)
+                # Find image which is the two overlapped.
                 rotated_map.paste(global_map, mask=rotated_map)
+                # Get number of places they overlap.
                 value = numpy.array(rotated_map).mean()
                 dist[(tuple(translation),  angle)] = value
         return dist
 
     def get_landmark_distribution(self, landmarks, angles, translations):
+        """Get the probability distribution by comparing new landmarks to old landmarks.
+        
+        Args:
+            landmarks: The list of new, matched landmarks.
+            angles (list): The angles to search through.
+            translations (list): The translations to search through.
+        """
         landmark_distribution = {}
         for dp in translations:  # For each alternative distance.
             for ap in angles:  # For each alternative angle turned.
@@ -122,6 +124,7 @@ class Slam(threading.Thread):
         return landmark_distribution
     
     def get_prior_distribution(self):
+        """Get the prior normal distribution for position and angle."""
         # Calculate change in angle and distance moved.
         turned = self.current.adjusted.heading - self.prev.adjusted.heading
         distance = util.dist(self.current.adjusted.location, self.prev.adjusted.location)
@@ -145,54 +148,72 @@ class Slam(threading.Thread):
                 
         return prior_distribution, angle_keys, position_keys
 
-    def get_ransac_landmarks(self):
-        pass
-
     def update_model(self, measurements):
+        """Update the map based on new measurements, depending on the mode selected.
+        
+        Args:
+            measurements (list): Newly observed measurements.
+        """
+        # Get the prior probability distribution.
         prior_distribution, angles, translations = self.get_prior_distribution()
         landmarks = []
 
         if self.slam_mode == util.SlamMode.LANDMARKS:
+            # Extract the landmarks.
             if self.landmark_mode == util.LandmarkMode.HOUGH:
                 landmarks = world.extract_hough_landmarks(self.grid.view_images[self.grid.view_mode.LOCAL])
             else:
                 landmarks = world.extract_landmarks(measurements)
+            # Associate the landmarks.
             world.associate_landmarks(landmarks, self.landmarks)
             associated_landmarks = [l for l in landmarks if l.association]
+            # Calculate the SLAM distribution from the extracted landmarks.
             slam_distribution = self.get_landmark_distribution(associated_landmarks, angles, translations)
         else:
+            # Calculate the SLAM distribution using scan matching.
             slam_distribution = self.get_scan_matching_distribution(angles, translations,
                                                                     self.current.adjusted.location)
+            # Make the minimum value have probability 0.
             smallest = min(list(slam_distribution.values()))
             slam_distribution = {key: slam_distribution[key] - smallest for key in slam_distribution}
 
+        # Normalise the distributions.
         normalised_slam_distribution = util.normalise_distribution(slam_distribution)
         normalised_prior_distribution = util.normalise_distribution(prior_distribution)
+
+        # Combine the distributions by multiplying them.
         combined_distribution = {key: normalised_prior_distribution[key] * normalised_slam_distribution[key]
                                  for key in normalised_prior_distribution}
 
+        # Plot the distributions.
         self.plot_distributions(normalised_prior_distribution, normalised_slam_distribution, combined_distribution)
 
+        # Calculate the optimal amount to move the robot.
         delta = max(combined_distribution, key=combined_distribution.get)
         self.comm.robot.adjustment.delta(delta[0], delta[1])
-        adjusted_map = translate(self.grid.view_images[self.grid.view_mode.LOCAL], -delta[1],
+        adjusted_map = occupancy.translate(self.grid.view_images[self.grid.view_mode.LOCAL], -delta[1],
                                  self.current.adjusted.location + self.grid.origin,
                                  self.current.adjusted.location + self.grid.origin + numpy.array(delta[0]))
 
+        # Combine the latest scan into the image.
         global_map = numpy.array(self.grid.view_images[self.grid.view_mode.ADJUSTED].convert("L")).astype(float)
         local_map = numpy.array(adjusted_map.convert("L")).astype(float)
         self.grid.view_images[self.grid.view_mode.ADJUSTED] = Image.fromarray(global_map * local_map * 2 / 255).convert(
             "RGBA")
 
+        # Adjust the new landmarks and append them to the landmark array.
         adjusted_landmarks = [landmark.transform(self.current.adjusted.location, delta[1], delta[0]) for landmark in
                               landmarks if not landmark.association]
         self.landmarks.extend(adjusted_landmarks)
 
     def plot_distributions(self, normalised_prior_distribution, normalised_slam_distribution, combined_distribution):
+        """Plot each of the distributions for visualisation."""
         plot_prior_distribution = {}
         plot_slam_distribution = {}
         plot_combined_distribution = {}
         loc = self.current.adjusted.location.astype(int)
+
+        # Get the location distribution.
         for key in normalised_slam_distribution:
             new_key = tuple(numpy.array(key[0]) + loc)
             plot_slam_distribution[new_key] = plot_slam_distribution.get(new_key, 0) + normalised_slam_distribution[key]
@@ -201,11 +222,13 @@ class Slam(threading.Thread):
             plot_prior_distribution[new_key] = plot_prior_distribution.get(new_key, 0) + normalised_prior_distribution[
                 key]
 
+        # Plot the distributions
         self.grid.plot_prob_dist(plot_slam_distribution, self.grid.probability_mode.SLAM_PROBABILITIES)
         self.grid.plot_prob_dist(plot_prior_distribution, self.grid.probability_mode.PRIOR_PROBABILITIES)
         self.grid.plot_prob_dist(plot_combined_distribution, self.grid.probability_mode.COMBINED_PROBABILITIES)
         
     def wait_for_command(self):
+        """Wait for an input, if in manual control mode."""
         if self.controlled:
             self.pause()
         with self.pause_cond:
@@ -216,6 +239,7 @@ class Slam(threading.Thread):
         self.current = copy.deepcopy(self.comm.robot)
 
     def take_measurements(self):
+        """Get measurements."""
         self.grid.clear()
         self.comm.get_measurements()
         while len(self.comm.measurements) < SAMPLES:
@@ -231,6 +255,11 @@ class Slam(threading.Thread):
         return result
 
     def move_robot(self, measurements):
+        """Move the robot, turning if there is an object in front of it.
+        
+        Args:
+            measurements (list): List of measurements.
+        """
         self.prev = copy.deepcopy(self.current)
         self.allow_control = self.controlled
         if not self.controlled:
@@ -240,16 +269,19 @@ class Slam(threading.Thread):
             self.comm.drive(30)
 
     def pause(self):
+        """Pause the SLAM algorithm."""
         if not self.paused:
             self.paused = True
             self.pause_cond.acquire()
 
     def resume(self):
+        """Resume the SLAM algorithm."""
         if self.paused:
             self.paused = False
             self.pause_cond.notify()
             self.pause_cond.release()
 
     def stop(self):
+        """Stop the SLAM algorithm."""
         self.running = False
         self.resume()

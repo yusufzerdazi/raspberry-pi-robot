@@ -18,18 +18,29 @@ LANDMARK_RADIUS = 20
 
 
 class Landmark(object):
-    """
+    """Landmark class.
 
     Attributes:
+        association (Landmark): Associated landmark.
         segment (list): Line segment.
     """
 
     def __init__(self, segment, association=None):
+        """Initialise landmark object.
+        
+        Args:
+            segment (list): Landmark line segment.
+            association (Landmark): Associated landmark.
+        """
         self.association = association
         self.segment = segment
 
     def __add__(self, other):
-        """Merge two landmarks into one, by taking the two endpoints that maximise their length."""
+        """Merge two landmarks into one, by taking the two endpoints that maximise their length.
+        
+        Args:
+            other (Landmark): Landmark to merge.
+        """
         current = 0
         segment = []
         for x in [self, other]:
@@ -43,18 +54,50 @@ class Landmark(object):
         return Landmark(segment, self.association)
 
     def transform(self, centre, angle=0.0, position=numpy.array([0, 0])):
+        """Transform the landmark by rotating and translating it.
+        
+        Args:
+            centre (np.ndarray): Coordinates to rotate around.
+            angle (float): Angle to rotate by.
+            position (np.ndarray): Translation vector.
+            
+        Returns:
+            Landmark: Transformed landmark.
+        """
         translated = [self.segment[0] + position, self.segment[1] + position]
         rotated = util.rotate_points(centre, translated, angle)
         return Landmark(rotated, self.association)
 
     def distance(self, other):
+        """Get the distance between two landmarks.
+        
+        Args:
+            other (Landmark): Landmark to get the distance to.
+            
+        Returns:
+            float: Distance between the landmarks.
+        """
         return metrics.origin_distance(self.segment, other.segment)
 
     def probability(self, other):
+        """Get the 'probability' two landmarks match.
+        
+        Args:
+            other (Landmark): Other landmark.
+            
+        Returns:
+            float: Probability they match.
+        """
         return 1/((self.distance(other)+1)/10)
 
 
 def associate_landmarks(new_landmarks, landmarks):
+    """Associate new landmarks with known landmarks.
+    
+    Args:
+        new_landmarks (list): New landmarks.
+        landmarks (list): Known landmarks.
+    """
     for l in new_landmarks:
         # Initialise variables
         distance = 99999
@@ -73,6 +116,14 @@ def associate_landmarks(new_landmarks, landmarks):
 
 
 def limit_landmarks(landmarks):
+    """Given a list of landmarks, remove likely duplicates.
+    
+    Args:
+        landmarks (list): List of landmarks
+        
+    Returns:
+        list: Landmarks without duplicates.
+    """
     new = []
     if len(landmarks) > 1:
         for l in landmarks:
@@ -131,6 +182,16 @@ def extract_landmarks(measurements):
 
 
 def find_consensus(unassigned, sample, is_vertical):
+    """Attempt to find a set of measurements that forms a consensus, in the list of measurements.
+    
+    Args:
+        unassigned (list): List of unassigned measurements.
+        sample (list): Measurements that fit the extracted line.
+        is_vertical (bool): Whether the landmark is close to being vertical.
+        
+    Returns:
+        list: List of measurements that fit the line.
+    """
     cartesian_sample = numpy.array([point.location for point in sample])
     cartesian_unassigned = numpy.array([point.location for point in unassigned])
     consensus = []
@@ -153,6 +214,15 @@ def find_consensus(unassigned, sample, is_vertical):
 
 
 def recalculate_line(consensus, is_vertical):
+    """Given a discovered consensus, recalculate the line with other points that are close enough.
+    
+    Args:
+        consensus (list): List of consensus measurements.
+        is_vertical (bool): Whether the line is almost vertical.
+    
+    Returns:
+        tuple: Start and end points of line segment.
+    """
     cartesian_consensus = numpy.array([point.location for point in consensus])
     # If almost vertical, calculate line in terms of y.
     if is_vertical:

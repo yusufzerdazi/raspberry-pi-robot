@@ -246,5 +246,6 @@ def translate(image, angle, center=None, new_center=None, scale=None):
 
 
 def black_white(image):
+    """Convert to black and white."""
     i = np.array(image.convert("L"))
     return (i > 150) * 255

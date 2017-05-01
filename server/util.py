@@ -132,20 +132,36 @@ def nearest(point, slope, intercept):
 
 
 def point_line_dist(point, slope, intersect):
+    """Distance between a point and a line.
+    
+    Args:
+        point (np.ndarray): Point location.
+        slope (float): Slope of the line.
+        intersect (float): y-intercept of line.
+    """
     return dist(point, nearest(point, slope, intersect))
 
 
-def normalise_distribution(d):
-    values = list(d.values())
+def normalise_distribution(distribution):
+    """Normalise a given probability distribution.
+    
+    Args:
+        distribution (dict): Probability distribution.
+        
+    Returns:
+        dict: Normalised distribution.
+    """
+    values = list(distribution.values())
 
     if len(values) > 0 and sum(values) > 0:
         total = sum(values)
-        return {key: d[key] / total for key in d}
+        return {key: distribution[key] / total for key in distribution}
     else:
-        return {key: 1 / len(d) for key in d}
+        return {key: 1 / len(distribution) for key in distribution}
 
 
 def middle(arr):
+    """Get the median of a list. If there is an even number, don't take an average."""
     if len(arr) == 0:
         return None
     else:
@@ -153,34 +169,40 @@ def middle(arr):
 
 
 class TrackingMode(enum.Enum):
+    """Mode for the map position."""
     FREE = 0
     STATE = 1
     ADJUSTED = 2
 
 
 class ViewMode(enum.Enum):
+    """Which scan to view."""
     STATE = 0
     ADJUSTED = 1
     LOCAL = 2
 
 
 class MapMode(enum.Enum):
+    """Which map to view."""
     DIST = 0
     PROB = 1
     FINAL = 2
 
 
 class SlamMode(enum.Enum):
+    """Which SLAM mode to use."""
     LANDMARKS = 0
     SCAN_MATCHING = 1
 
 
 class LandmarkMode(enum.Enum):
+    """Which landmark mode to use."""
     RANSAC = 0
     HOUGH = 1
 
 
 class ProbabilityMode(enum.Enum):
+    """Which probability distribution to view."""
     COMBINED_PROBABILITIES = 0
     SLAM_PROBABILITIES = 1
     PRIOR_PROBABILITIES = 3

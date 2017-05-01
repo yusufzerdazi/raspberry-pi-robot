@@ -4,12 +4,11 @@ import sys
 import threading
 
 import numpy as np
-import time
 from PIL import ImageQt
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image
 
-import server.simulation as communication
+# import server.simulation as communication
 from server import communication
 from server import robot, slam, occupancy
 from server.util import TrackingMode, ViewMode, MapMode, SlamMode, LandmarkMode
@@ -231,12 +230,6 @@ class Main(QtWidgets.QMainWindow):
         image_qt = ImageQt.ImageQt(self.view_state.get_image())
         self.imageLabel.setPixmap(QtGui.QPixmap.fromImage(image_qt))
         self.imageLabel.adjustSize()
-
-        if not self.slam.isAlive():
-            self.slam.stop()
-            self.communication.stop()
-            self.view_state.stop()
-            self.close()
 
     def set_display_mode(self, mode):
         """Set the display mode, to switch between viewing probabilities or the map."""
