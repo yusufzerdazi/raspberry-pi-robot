@@ -165,7 +165,7 @@ class Slam(threading.Thread):
             else:
                 landmarks = world.extract_landmarks(measurements)
             # Associate the landmarks.
-            world.associate_landmarks(landmarks, self.landmarks)
+            world.associate_landmarks(landmarks, [l for l in self.landmarks if not l.association])
             associated_landmarks = [l for l in landmarks if l.association]
             # Calculate the SLAM distribution from the extracted landmarks.
             slam_distribution = self.get_landmark_distribution(associated_landmarks, angles, translations)
@@ -203,7 +203,7 @@ class Slam(threading.Thread):
 
         # Adjust the new landmarks and append them to the landmark array.
         adjusted_landmarks = [landmark.transform(self.current.adjusted.location, delta[1], delta[0]) for landmark in
-                              landmarks if not landmark.association]
+                              landmarks]
         self.landmarks.extend(adjusted_landmarks)
 
     def plot_distributions(self, normalised_prior_distribution, normalised_slam_distribution, combined_distribution):

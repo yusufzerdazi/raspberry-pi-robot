@@ -8,8 +8,8 @@ from PIL import ImageQt
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image
 
-# import server.simulation as communication
-from server import communication
+# import server.simulation as communication # Import this to use the simulated robot
+from server import communication  # Import this when using the real robot.
 from server import robot, slam, occupancy
 from server.util import TrackingMode, ViewMode, MapMode, SlamMode, LandmarkMode
 
@@ -26,7 +26,7 @@ class Main(QtWidgets.QMainWindow):
         communication (communication.Comm): Object for socket communication.
         view_state (ViewState): Contains variables for the current image to display.
     """
-    def __init__(self, width, height, error=0, size=None):
+    def __init__(self, width, height, error=0, size=150):
         """Initialise MapViewer object.
         
         Args:
