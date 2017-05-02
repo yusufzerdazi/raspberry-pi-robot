@@ -75,14 +75,17 @@ class Grid(object):
             ProbabilityMode.LOCAL_MAP: Image.new("RGBA", (self.width, self.height), "black"),
         }
 
-    def plot_measurement(self, measurement, radius=2):
+    def plot_measurement(self, measurement, radius=2, naive=False):
         """Plot a measurements.
 
         Args:
             measurement (Measurement): Measurement to plot.
             radius (int): Radius of measurement ends.
         """
-        draw = ImageDraw.Draw(self.view_images[ViewMode.LOCAL])
+        if naive:
+            draw = ImageDraw.Draw(self.view_images[ViewMode.ADJUSTED])
+        else:
+            draw = ImageDraw.Draw(self.view_images[ViewMode.LOCAL])
 
         # Add origin so it get's displayed from centre.
         start = measurement.state.location + self.origin

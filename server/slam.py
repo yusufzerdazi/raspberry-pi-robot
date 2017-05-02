@@ -24,6 +24,7 @@ class Slam(threading.Thread):
     
     Attributes:
         running (bool): Thread running.
+        naive (bool): Whether to run naively.
         controlled (bool): Whether the robot is controlled manually.
         comm (communication.Comm): Object for communicating with the Raspberry Pi.
         grid (occupancy.Grid): Object for storing the map.
@@ -50,6 +51,7 @@ class Slam(threading.Thread):
 
         self.running = True
         self.controlled = True
+        self.naive = False
         self.comm = comm
         self.grid = grid
         self.allow_control = self.controlled
@@ -229,30 +231,37 @@ class Slam(threading.Thread):
         
     def wait_for_command(self):
         """Wait for an input, if in manual control mode."""
-        if self.controlled:
+        if self.controlled and not self.naive:
             self.pause()
         with self.pause_cond:
             while self.paused:
                 self.pause_cond.wait()
-        self.allow_control = False
-        self.comm.move(0, False)
-        self.current = copy.deepcopy(self.comm.robot)
+        if not self.naive:
+            self.allow_control = False
+            self.comm.move(0, False)
+            self.current = copy.deepcopy(self.comm.robot)
 
     def take_measurements(self):
         """Get measurements."""
-        self.grid.clear()
-        self.comm.get_measurements()
-        while len(self.comm.measurements) < SAMPLES:
-            time.sleep(.02)
+        if not self.naive:
+            self.grid.clear()
+            self.comm.get_measurements()
 
-        measurements = self.comm.get_median_measurements()
-        result = []
-        for measurement in measurements:
-            if measurement.distance < 255:
-                result.append(measurement)
-                self.grid.plot_measurement(measurement)
+            while len(self.comm.measurements) < SAMPLES and self.running:
+                time.sleep(.02)
 
-        return result
+            measurements = self.comm.get_median_measurements()
+            result = []
+            for measurement in measurements:
+                if measurement.distance < 255:
+                    result.append(measurement)
+                    self.grid.plot_measurement(measurement)
+
+            return result
+        else:
+            for measurement in self.comm.measurements:
+                if measurement.distance < 255:
+                    self.grid.plot_measurement(measurement, naive=True)
 
     def move_robot(self, measurements):
         """Move the robot, turning if there is an object in front of it.

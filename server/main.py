@@ -8,7 +8,7 @@ from PIL import ImageQt
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PIL import Image
 
-# import server.simulation as communication # Import this to use the simulated robot
+#import server.simulation as communication # Import this to use the simulated robot
 from server import communication  # Import this when using the real robot.
 from server import robot, slam, occupancy
 from server.util import TrackingMode, ViewMode, MapMode, SlamMode, LandmarkMode
@@ -142,12 +142,15 @@ class Main(QtWidgets.QMainWindow):
         slam_type_scan_matching = slam_type_ag.addAction(QtWidgets.QAction('Scan Matching', self, checkable=True))
         slam_type_hough = slam_type_ag.addAction(QtWidgets.QAction('Hough Landmarks', self, checkable=True))
         slam_type_ransac = slam_type_ag.addAction(QtWidgets.QAction('RANSAC Landmarks', self, checkable=True))
+        slam_type_naive = slam_type_ag.addAction(QtWidgets.QAction('Naive', self, checkable=True))
         slam_type_scan_matching.triggered.connect(lambda x: self.set_slam_type(SlamMode.SCAN_MATCHING))
         slam_type_hough.triggered.connect(lambda x: self.set_slam_type(LandmarkMode.HOUGH))
         slam_type_ransac.triggered.connect(lambda x: self.set_slam_type(LandmarkMode.RANSAC))
+        slam_type_naive.triggered.connect(lambda x: self.set_slam_type(SlamMode.NAIVE))
         slam_type_menu.addAction(slam_type_scan_matching)
         slam_type_menu.addAction(slam_type_hough)
         slam_type_menu.addAction(slam_type_ransac)
+        slam_type_menu.addAction(slam_type_naive)
         self.menuBar().addMenu(slam_type_menu)
 
         # Set up miscellaneous options.
@@ -260,13 +263,18 @@ class Main(QtWidgets.QMainWindow):
     def set_slam_type(self, mode):
         """Set the SLAM type."""
         if mode == LandmarkMode.RANSAC:
+            self.slam.naive = False
             self.slam.slam_mode = SlamMode.LANDMARKS
             self.slam.landmark_mode = LandmarkMode.RANSAC
         elif mode == LandmarkMode.HOUGH:
+            self.slam.naive = False
             self.slam.slam_mode = SlamMode.LANDMARKS
             self.slam.landmark_mode = LandmarkMode.HOUGH
-        else:
+        elif mode == SlamMode.SCAN_MATCHING:
+            self.slam.naive = False
             self.slam.slam_mode = SlamMode.SCAN_MATCHING
+        else:
+            self.slam.naive = True
 
 
 class ViewState(threading.Thread):

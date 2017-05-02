@@ -193,6 +193,7 @@ class SlamMode(enum.Enum):
     """Which SLAM mode to use."""
     LANDMARKS = 0
     SCAN_MATCHING = 1
+    NAIVE = 3
 
 
 class LandmarkMode(enum.Enum):
