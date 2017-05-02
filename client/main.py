@@ -5,13 +5,13 @@ import util
 import comm
 import numpy as np
 
-ANGLE_PER_ENCODER = 0.109236273
-CM_PER_ENCODER = 0.022114184
+ANGLE_PER_ENCODER = 0.0983126457 #0.109236273
+CM_PER_ENCODER = 0.02295788632 #0.022114184
 
 
 class Encoders(object):
     def __init__(self):
-        self.tol = 20
+        self.tol = 0
         self.encoders = np.array([0, 0, 0])
         self.actual = np.array([0, 0, 0])
 
@@ -27,10 +27,11 @@ class Sensor(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.lock = threading.Lock()
-        self.speed = 60
+        self.speed = 50
         self.paused = True  # Start out paused
         self.running = True  # Robot is sensing
         self.state = threading.Condition()
+        self.right = True
 
     def run(self):
         while self.running:
@@ -38,7 +39,9 @@ class Sensor(threading.Thread):
                 if self.paused:
                     self.state.wait()  # Block until notified
             util.rotate(90, self.speed)
+            self.right = False
             util.rotate(-90, self.speed)
+            self.right = True
             util.rotate(0, self.speed)
 
     def resume(self):
@@ -64,35 +67,26 @@ class State(object):
         self.heading = 0.0
 
     def update(self, encoders):
-        # Calculate change in encoder values
-        """dleft = left - self.left
-        dright = right - self.right
-        distance = (dleft + dright) / 2
-
-        if dleft * dright > 0:
-            self.x = self.x + distance * math.cos(math.radians(self.heading)) * CM_PER_ENCODER
-            self.y = self.y + distance * math.sin(math.radians(self.heading)) * CM_PER_ENCODER
-        else:
-            theta = ANGLE_PER_ENCODER * (dright - dleft)
-            self.heading = self.heading + theta
-
-        self.left, self.right = left, right"""
-
         sensor, left, right = encoders
 
         left_delta = (left - self.left)
         right_delta = (right - self.right)
 
-        if left_delta == right_delta:
+        if np.sign(left_delta) == np.sign(right_delta):#left_delta == right_delta:
             self.x = self.x + left_delta * math.cos(math.radians(self.heading)) * CM_PER_ENCODER
             self.y = self.y + right_delta * math.sin(math.radians(self.heading)) * CM_PER_ENCODER
         else:
-            wd = (right_delta - left_delta) * ANGLE_PER_ENCODER
-            R = ((left_delta + right_delta) * wd) / (CM_PER_ENCODER * (right_delta - left_delta)**2)
+            #wd = (right_delta - left_delta) * ANGLE_PER_ENCODER
+            #R = ((left_delta + right_delta) * wd) / (CM_PER_ENCODER * (right_delta - left_delta)**2)
 
-            self.x = self.x + R * math.sin(math.radians(wd + self.heading)) - R * math.sin(math.radians(self.heading))
-            self.y = self.y - R * math.cos(math.radians(wd + self.heading)) + R * math.cos(math.radians(self.heading))
-            self.heading = (self.heading + wd)
+            #self.x = self.x + R * math.sin(math.radians(wd + self.heading)) - R * math.sin(math.radians(self.heading))
+            #self.y = self.y - R * math.cos(math.radians(wd + self.heading)) + R * math.cos(math.radians(self.heading))
+            #self.heading = (self.heading + wd)
+
+            sgn = np.sign(right_delta)
+            avg = abs(left_delta) + abs(right_delta)
+            self.heading += sgn * avg * ANGLE_PER_ENCODER
+
 
         self.left = left
         self.right = right
@@ -109,10 +103,17 @@ class Robot(threading.Thread):
         self.sensor.start()
 
     def run(self):
+        count = 0
         while self.running:
             # Update sensor values
             util.update()
             self.encoders.update()
+            front, rear = util.sensors()
+            r = self.sensor.right
+            #if count < 5000:
+            #    if front not in [-1, 255]:
+            #        print str(count) + "," + str(abs(int(self.encoders.actual[0])/2)) + "," + str(front)
+            #        count += 1
             self.state.update(self.encoders.actual)
 
             # Get recieved commands
@@ -129,8 +130,7 @@ class Robot(threading.Thread):
             util.move(power, rotate)
 
             # Send data
-            sensors = util.sensors()
-            self.comm.send(self.state.x, self.state.y, self.state.heading, *sensors)
+            self.comm.send(self.state.x, self.state.y, self.state.heading, self.encoders.actual[0], front, rear)
 
             # Sleep so sensors have time to update
             time.sleep(.02)
